@@ -3,8 +3,8 @@
 -- staff / staff123
 insert into users (name, username, role, password_hash)
 values
-  ('Admin', 'admin', 'admin', '$2b$10$kuyya0Jyvld2vr3FhMaP6ONsDNo1lcy6HFq3kD9qs9u6LqCgwvDoy'),
-  ('Billing Staff', 'staff', 'staff', '$2b$10$nJ3dhVpz7p5tLOeZRjrPOOzpL4vX/U8PlG74CZaGOX0JmjqkV/5hW')
+  ('Admin', 'admin', 'admin', '$2b$10$U1cWasMfKIldKWjGIQ.7Ru2NlPqZ0vzeJWu8giRrStHFGe/9i2XUa'),
+  ('Billing Staff', 'staff', 'staff', '$2b$10$CPTC6Z7e6ZUTLLSDNwAe6OQzoY0Q9HhwM2UIekH7odOlJ5u0yXFe2')
 on conflict (username) do nothing;
 
 insert into suppliers (name, contact_person, mobile, address, gstin)
