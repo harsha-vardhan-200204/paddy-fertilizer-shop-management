@@ -110,19 +110,27 @@ function createApi(token, onUnauthorized) {
 function Login({ onLogin }) {
   const [form, setForm] = useState({ username: "admin", password: "admin123" });
   const [error, setError] = useState("");
+  
   async function submit(event) {
     event.preventDefault();
     setError("");
+    const credentials = {
+      username: form.username.trim(),
+      password: form.password.trim()
+    };
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form)
+       body: JSON.stringify(credentials)
       });
-      if (!res.ok) throw new Error("Invalid login");
+     if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || "Login failed. Check that the API server is running.");
+      }
       onLogin(await res.json());
     } catch (err) {
-      setError(err.message);
+      setError(err instanceof TypeError ? "Cannot reach the API server. Run npm run dev and try again." : err.message);
     }
   }
   return (
