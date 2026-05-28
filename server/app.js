@@ -1,50 +1,32 @@
-import { NextResponse } from "next/server";
-import bcrypt from "bcryptjs";
-import { supabase } from "@/lib/supabase";
+app.post("/api/auth/login", asyncRoute(async (req, res) => {
+  const { username, password } = req.body;
 
-export async function POST(req) {
-  try {
-    const { username, password } = await req.json();
+  console.log("LOGIN BODY:", req.body);
 
-    const { data: user, error } = await supabase
-      .from("users")
-      .select("*")
-      .eq("username", username)
-      .single();
+  const user = await store.findUser(username);
 
-    if (error || !user) {
-      return NextResponse.json(
-        { message: "Invalid login" },
-        { status: 401 }
-      );
-    }
+  console.log("USER FOUND:", user);
 
-    const validPassword = await bcrypt.compare(
-      password,
-      user.password_hash
-    );
-
-    if (!validPassword) {
-      return NextResponse.json(
-        { message: "Invalid login" },
-        { status: 401 }
-      );
-    }
-
-    return NextResponse.json({
-      success: true,
-      user: {
-        id: user.id,
-        name: user.name,
-        username: user.username,
-        role: user.role
-      }
-    });
-
-  } catch (err) {
-    return NextResponse.json(
-      { message: "Server error" },
-      { status: 500 }
-    );
+  if (user) {
+    const valid = await store.verifyPassword(password, user.password_hash);
+    console.log("PASSWORD MATCH:", valid);
   }
-}
+
+  if (!user || !(await store.verifyPassword(password, user.password_hash))) {
+    return res.status(401).json({
+      message: "Invalid username or password"
+    });
+  }
+
+  const safeUser = {
+    id: user.id,
+    name: user.name,
+    username: user.username,
+    role: user.role
+  };
+
+  res.json({
+    token: signToken(safeUser),
+    user: safeUser
+  });
+}));
