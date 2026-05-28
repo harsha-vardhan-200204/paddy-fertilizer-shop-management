@@ -1,20 +1,39 @@
-import jwt from "jsonwebtoken";
+import { supabase } from "./supabase";
+import bcrypt from "bcryptjs";
 
-const secret = process.env.JWT_SECRET || "dev-paddy-secret";
+export async function loginUser(username, password) {
+  const { data: user, error } = await supabase
+    .from("users")
+    .select("*")
+    .eq("username", username.trim())
+    .single();
 
-export function signToken(user) {
-  return jwt.sign(user, secret, { expiresIn: "12h" });
-}
-
-export function requireAuth(req, res, next) {
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  if (!token) return res.status(401).json({ message: "Login required" });
-
-  try {
-    req.user = jwt.verify(token, secret);
-    next();
-  } catch (_error) {
-    res.status(401).json({ message: "Session expired. Please login again." });
+  if (error || !user) {
+    return {
+      success: false,
+      message: "User not found"
+    };
   }
+
+  const isValid = await bcrypt.compare(
+    password,
+    user.password_hash
+  );
+
+  if (!isValid) {
+    return {
+      success: false,
+      message: "Invalid login"
+    };
+  }
+
+  return {
+    success: true,
+    user: {
+      id: user.id,
+      name: user.name,
+      username: user.username,
+      role: user.role
+    }
+  };
 }
