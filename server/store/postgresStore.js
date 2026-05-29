@@ -114,8 +114,13 @@ export class PostgresStore {
            values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
           [randomUUID(), sale.rows[0].id, item.product_id, item.product_name, item.hsn_code, item.qty, item.rate, item.discount, item.gst_percent, item.cgst, item.sgst, item.total]
         );
-        await client.query("update products set current_stock = current_stock - $1 where id = $2", [Number(item.qty || 0), item.product_id]);
-        await client.query("insert into stock_logs (id, product_id, product_name, type, qty, note, created_by) values ($1,$2,$3,$4,$5,$6,$7)", [randomUUID(), item.product_id, item.product_name, "sale", -Number(item.qty || 0), invoiceNumber, user?.name]);
+        const qty = Number(item.qty || 0);
+        const stock = await client.query(
+          "update products set current_stock = coalesce(current_stock, 0) - $1, updated_at = now() where id = $2 returning name",
+          [qty, item.product_id]
+        );
+        if (!stock.rows[0]) throw Object.assign(new Error(`Product not found for stock update: ${item.product_name || item.product_id}`), { status: 404 });
+        await client.query("insert into stock_logs (id, product_id, product_name, type, qty, note, created_by) values ($1,$2,$3,$4,$5,$6,$7)", [randomUUID(), item.product_id, item.product_name || stock.rows[0].name, "sale", -qty, invoiceNumber, user?.name]);
       }
       if (data.customer_id && sale.rows[0].balance_due > 0) {
         await client.query("update customers set pending_balance = coalesce(pending_balance,0) + $1, credit_amount = coalesce(credit_amount,0) + $1 where id = $2", [sale.rows[0].balance_due, data.customer_id]);
@@ -135,18 +140,41 @@ export class PostgresStore {
   }
 
   async createPurchase(data, user) {
-    const purchase = await this.create("purchases", {
-      supplier_id: data.supplier_id || null,
-      supplier_name: data.supplier_name || "",
-      invoice_number: data.invoice_number,
-      purchase_date: data.purchase_date || today(),
-      total_amount: round((data.items || []).reduce((total, item) => total + Number(item.total_amount || 0), 0)),
-      created_by: user?.name
-    });
-    for (const item of data.items || []) {
-      await this.create("purchase_items", { purchase_id: purchase.id, ...item });
-      await this.adjustStock(item.product_id, { qty: Number(item.qty || 0), type: "purchase", note: purchase.invoice_number }, user);
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const purchase = await client.query(
+        `insert into purchases (id, supplier_id, supplier_name, invoice_number, purchase_date, total_amount, created_by)
+         values ($1,$2,$3,$4,$5,$6,$7) returning *`,
+        [randomUUID(), data.supplier_id || null, data.supplier_name || "", data.invoice_number, data.purchase_date || today(), round((data.items || []).reduce((total, item) => total + Number(item.total_amount || 0), 0)), user?.name]
+      );
+      for (const item of data.items || []) {
+        await client.query(
+          `insert into purchase_items (id, purchase_id, product_id, qty, purchase_rate, gst, total_amount)
+           values ($1,$2,$3,$4,$5,$6,$7)`,
+          [randomUUID(), purchase.rows[0].id, item.product_id, item.qty, item.purchase_rate, item.gst, item.total_amount]
+        );
+        const qty = Number(item.qty || 0);
+        const stock = await client.query(
+          "update products set current_stock = coalesce(current_stock, 0) + $1, purchase_price = coalesce($2, purchase_price), updated_at = now() where id = $3 returning name",
+          [qty, item.purchase_rate === undefined || item.purchase_rate === "" ? null : Number(item.purchase_rate), item.product_id]
+        );
+        if (!stock.rows[0]) throw Object.assign(new Error(`Product not found for stock update: ${item.product_id}`), { status: 404 });
+        await client.query("insert into stock_logs (id, product_id, product_name, type, qty, note, created_by) values ($1,$2,$3,$4,$5,$6,$7)", [randomUUID(), item.product_id, stock.rows[0].name, "purchase", qty, purchase.rows[0].invoice_number, user?.name]);
+      }
+      await client.query("commit");
+      return this.getPurchase(purchase.rows[0].id);
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
     }
+  }
+
+  async getPurchase(id) {
+    const purchase = await this.one("select * from purchases where id = $1", [id]);
+    if (!purchase) return null;
     purchase.items = await this.many("select * from purchase_items where purchase_id = $1", [purchase.id]);
     return purchase;
   }

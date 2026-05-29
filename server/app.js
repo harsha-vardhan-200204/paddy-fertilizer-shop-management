@@ -66,7 +66,7 @@ app.get("/api/shop", (_req, res) => {
   res.json({
     name: process.env.SHOP_NAME || "SRI ANJANEYA AGRO AGENCIES",
     legalName: process.env.SHOP_LEGAL_NAME || "JUNJI MARUTHI",
-    address: process.env.SHOP_ADDRESS || "Main Road, Mandya, Karnataka",
+    address: process.env.SHOP_ADDRESS || "Shri Shiva nilaya Hale kunduvada Davangere\nHale kunduvada\nDAVANAGERE, KARNATAKA 577566\nIndia",
     gstin: process.env.SHOP_GSTIN || "29ANHPM1365Q1ZA",
     phone: process.env.SHOP_PHONE || "9900389992"
   });

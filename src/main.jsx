@@ -39,7 +39,7 @@ const currency = new Intl.NumberFormat("en-IN", { style: "currency", currency: "
 const defaultShop = {
   name: "SRI ANJANEYA AGRO AGENCIES",
   legalName: "JUNJI MARUTHI",
-  address: "Main Road, Mandya, Karnataka",
+  address: "Shri Shiva nilaya Hale kunduvada Davangere\nHale kunduvada\nDAVANAGERE, KARNATAKA 577566\nIndia",
   gstin: "29ANHPM1365Q1ZA",
   phone: "9900389992"
 };
@@ -356,6 +356,7 @@ function Billing({ api, notify }) {
     const payload = { ...form, items: lines.map(({ product, gst, ...line }) => ({ ...line, rate: line.rate, gst_percent: gst })) };
     const saved = await api.post("/sales", payload);
     setInvoice(saved);
+    setProducts(await api.get("/products"));
     notify("Invoice generated");
     setTimeout(() => notify(""), 2200);
   }
@@ -416,7 +417,17 @@ function InvoicePreview({ shop, invoice }) {
           <p><b>Legal Name:</b> {shopDetails.legalName}</p>
           <p><b>GSTIN:</b> {shopDetails.gstin}</p>
           <p><b>Phone:</b> {shopDetails.phone}</p>
-          {shopDetails.address && <p><b>Address:</b> {shopDetails.address}</p>}
+          {shopDetails.address && (
+            <p>
+              <b>Shop Address:</b>{" "}
+              {String(shopDetails.address).split(/\r?\n/).map((line, index) => (
+                <React.Fragment key={line || index}>
+                  {index > 0 && <br />}
+                  {line}
+                </React.Fragment>
+              ))}
+            </p>
+          )}
         </div>
         <div className="mt-4 grid grid-cols-2 border-y border-slate-300 py-2 text-sm">
           <span>Invoice: <b>{invoice.invoice_number}</b></span>
@@ -455,6 +466,7 @@ function Purchases({ api, notify }) {
     await api.post("/purchases", form);
     notify("Purchase added and stock updated");
     setTimeout(() => notify(""), 2200);
+    api.get("/products").then(setProducts);
     api.get("/purchases").then(setRows);
   }
   return (
