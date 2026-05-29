@@ -28,14 +28,17 @@ app.use(express.json({ limit: "2mb" }));
 const asyncRoute = (handler) => (req, res, next) =>
   Promise.resolve(handler(req, res, next)).catch(next);
 
-app.get("/api/health", (_req, res) => {
+app.get("/api/health", asyncRoute(async (_req, res) => {
+  const database = await store.health?.();
   res.json({
     ok: true,
     database: store.kind,
+    databaseStatus: database?.ok ? "connected" : "not-connected",
+    databaseError: database?.ok ? undefined : database?.message,
     environment: process.env.NODE_ENV || "development",
     timestamp: new Date().toISOString()
   });
-});
+}));
 
 app.post("/api/auth/login", asyncRoute(async (req, res) => {
   const username = String(req.body?.username || "").trim();

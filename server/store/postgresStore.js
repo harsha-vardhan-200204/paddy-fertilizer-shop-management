@@ -15,7 +15,19 @@ export class PostgresStore {
   }
 
   async init() {
-    await this.pool.query("select 1");
+    return this.health();
+  }
+
+  async health() {
+    try {
+      await this.pool.query("select 1");
+      return { ok: true };
+    } catch (error) {
+      return {
+        ok: false,
+        message: readableDatabaseError(error)
+      };
+    }
   }
 
   async findUser(username) {
@@ -273,4 +285,20 @@ function today() {
 
 function sum(rows, key) {
   return round(rows.reduce((total, row) => total + Number(row[key] || 0), 0));
+}
+
+function readableDatabaseError(error) {
+  if (error?.code === "ENOTFOUND") {
+    return `Database host not found: ${error.hostname}. Check the DATABASE_URL value in Vercel.`;
+  }
+  if (error?.code === "ECONNREFUSED" || error?.code === "ETIMEDOUT") {
+    return "Database connection failed. Check that the DATABASE_URL host, port, password, and SSL mode are correct.";
+  }
+  if (error?.code === "28P01") {
+    return "Database login failed. Check the username and password in DATABASE_URL.";
+  }
+  if (error?.code === "3D000") {
+    return "Database name not found. Check the database name in DATABASE_URL.";
+  }
+  return error?.message || "Database connection failed.";
 }

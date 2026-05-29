@@ -42,6 +42,10 @@ export class FileStore {
     }
   }
 
+  async health() {
+    return { ok: true };
+  }
+
   async seed() {
     this.db.users.push(
       { id: id(), name: "Admin", username: "admin", role: "admin", password_hash: await bcrypt.hash("admin123", 10) },

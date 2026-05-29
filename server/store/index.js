@@ -36,6 +36,9 @@ class MissingDatabaseStore {
   }
 
   async init() {}
+  async health() {
+    return { ok: false, message: "DATABASE_URL is missing in Vercel environment variables." };
+  }
   async findUser() { this.fail(); }
   async list() { this.fail(); }
   async getById() { this.fail(); }
