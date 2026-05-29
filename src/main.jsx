@@ -32,9 +32,9 @@ import {
   YAxis
 } from "recharts";
 import * as XLSX from "xlsx";
+import { createApi, login } from "./api.js";
 import "./styles.css";
 
-const apiBase = "";
 const currency = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 });
 const productTypes = ["Urea", "DAP", "Potash", "Pesticide", "Seeds", "Micronutrients", "Organic fertilizer"];
 const units = ["Bag", "Kg", "Litre", "Packet"];
@@ -84,29 +84,6 @@ function App() {
   );
 }
 
-function createApi(token, onUnauthorized) {
-  async function request(path, options = {}) {
-    const res = await fetch(`${apiBase}/api${path}`, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(options.headers || {})
-      }
-    });
-    if (res.status === 401) onUnauthorized?.();
-    if (!res.ok) throw new Error((await res.json()).message || "Request failed");
-    if (res.status === 204) return null;
-    return res.json();
-  }
-  return {
-    get: (path) => request(path),
-    post: (path, body) => request(path, { method: "POST", body: JSON.stringify(body) }),
-    put: (path, body) => request(path, { method: "PUT", body: JSON.stringify(body) }),
-    delete: (path) => request(path, { method: "DELETE" })
-  };
-}
-
 function Login({ onLogin }) {
   const [form, setForm] = useState({ username: "admin", password: "admin123" });
   const [error, setError] = useState("");
@@ -119,18 +96,9 @@ function Login({ onLogin }) {
       password: form.password.trim()
     };
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-       body: JSON.stringify(credentials)
-      });
-     if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || "Login failed. Check that the API server is running.");
-      }
-      onLogin(await res.json());
+      onLogin(await login(credentials));
     } catch (err) {
-      setError(err instanceof TypeError ? "Cannot reach the API server. Run npm run dev and try again." : err.message);
+      setError(err instanceof TypeError ? "Cannot reach the API server. Check backend deployment and VITE_API_URL." : err.message);
     }
   }
   return (

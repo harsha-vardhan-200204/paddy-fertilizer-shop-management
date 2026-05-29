@@ -6,6 +6,11 @@ function apiUrl(path) {
   return `${API_BASE_URL}/api${normalizedPath}`;
 }
 
+async function parseError(res, fallback) {
+  const data = await res.json().catch(() => ({}));
+  return new Error(data.message || fallback);
+}
+
 export async function login(credentials) {
   const res = await fetch(apiUrl("/auth/login"), {
     method: "POST",
@@ -17,8 +22,7 @@ export async function login(credentials) {
   });
 
   if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.message || "Login failed. Check that the API server is running.");
+    throw await parseError(res, "Login failed. Check that the API server is running.");
   }
 
   return res.json();
@@ -38,8 +42,7 @@ export function createApi(token, onUnauthorized) {
     if (res.status === 401) onUnauthorized?.();
 
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      throw new Error(data.message || "Request failed");
+      throw await parseError(res, "Request failed");
     }
 
     if (res.status === 204) return null;

@@ -8,14 +8,33 @@ import { calculateInvoice, exportCsv, exportExcelBase64 } from "./utils/reports.
 const app = express();
 const store = await createStore();
 
-app.use(cors());
+const allowedOrigins = (process.env.CLIENT_URL || process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin)) return callback(null, true);
+    if (/^http:\/\/(localhost|127\.0\.0\.1):\d+$/i.test(origin)) return callback(null, true);
+    return callback(new Error(`CORS blocked request from ${origin}`));
+  },
+  credentials: true
+}));
 app.use(express.json({ limit: "2mb" }));
 
 const asyncRoute = (handler) => (req, res, next) =>
   Promise.resolve(handler(req, res, next)).catch(next);
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, database: store.kind });
+  res.json({
+    ok: true,
+    database: store.kind,
+    environment: process.env.NODE_ENV || "development",
+    timestamp: new Date().toISOString()
+  });
 });
 
 app.post("/api/auth/login", asyncRoute(async (req, res) => {
