@@ -411,11 +411,12 @@ function InvoicePreview({ shop, invoice }) {
   return (
     <Panel title="Invoice Preview" actions={<button onClick={() => window.print()} className="icon-btn" title="Print"><Printer className="h-5 w-5" /></button>}>
       <div id="invoice" className="invoice">
-        <div className="text-center">
-          <h2 className="text-xl font-bold">{shopDetails.name}</h2>
-          <p>Legal Name: {shopDetails.legalName}</p>
-          <p>{shopDetails.address}</p>
-          <p>GSTIN: {shopDetails.gstin} | Phone: {shopDetails.phone}</p>
+        <div className="invoice-shop-details">
+          <p><b>Shop Name:</b> {shopDetails.name}</p>
+          <p><b>Legal Name:</b> {shopDetails.legalName}</p>
+          <p><b>GSTIN:</b> {shopDetails.gstin}</p>
+          <p><b>Phone:</b> {shopDetails.phone}</p>
+          {shopDetails.address && <p><b>Address:</b> {shopDetails.address}</p>}
         </div>
         <div className="mt-4 grid grid-cols-2 border-y border-slate-300 py-2 text-sm">
           <span>Invoice: <b>{invoice.invoice_number}</b></span>

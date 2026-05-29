@@ -118,6 +118,12 @@ td {
   background: white;
 }
 
+.invoice-shop-details {
+  text-align: left;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
 @media (max-width: 960px) {
   aside {
     display: none !important;

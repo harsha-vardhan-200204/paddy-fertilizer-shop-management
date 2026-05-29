@@ -1,5 +1,7 @@
-const rawApiUrl = import.meta.env.VITE_API_URL || "";
-export const API_BASE_URL = rawApiUrl.replace(/\/+$/, "");
+const rawApiUrl = (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+const isLocalApiUrl = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(rawApiUrl);
+
+export const API_BASE_URL = import.meta.env.PROD && isLocalApiUrl ? "" : rawApiUrl;
 
 function apiUrl(path) {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
