@@ -4,7 +4,9 @@ import { PostgresStore } from "./postgresStore.js";
 
 export async function createStore() {
   if (process.env.VERCEL === "1" && !process.env.DATABASE_URL) {
-    throw new Error("DATABASE_URL is required on Vercel so sales, purchases, and stock changes are saved in PostgreSQL.");
+    const store = new MissingDatabaseStore();
+    store.verifyPassword = verifyPassword;
+    return store;
   }
 
   const store = process.env.DATABASE_URL
@@ -21,4 +23,33 @@ export async function hashPassword(password) {
 
 export async function verifyPassword(password, hash) {
   return bcrypt.compare(password, hash);
+}
+
+class MissingDatabaseStore {
+  kind = "missing-database";
+
+  fail() {
+    throw Object.assign(
+      new Error("Database is not configured. Add DATABASE_URL in Vercel environment variables so stock and invoices are saved permanently."),
+      { status: 503 }
+    );
+  }
+
+  async init() {}
+  async findUser() { this.fail(); }
+  async list() { this.fail(); }
+  async getById() { this.fail(); }
+  async create() { this.fail(); }
+  async update() { this.fail(); }
+  async remove() { this.fail(); }
+  async adjustStock() { this.fail(); }
+  async listSales() { this.fail(); }
+  async getSale() { this.fail(); }
+  async createSale() { this.fail(); }
+  async listPurchases() { this.fail(); }
+  async createPurchase() { this.fail(); }
+  async createPayment() { this.fail(); }
+  async stockLogs() { this.fail(); }
+  async dashboard() { this.fail(); }
+  async report() { this.fail(); }
 }
