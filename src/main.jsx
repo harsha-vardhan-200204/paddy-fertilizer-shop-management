@@ -36,6 +36,13 @@ import { createApi, login } from "./api.js";
 import "./styles.css";
 
 const currency = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 });
+const defaultShop = {
+  name: "SRI ANJANEYA AGRO AGENCIES",
+  legalName: "JUNJI MARUTHI",
+  address: "Main Road, Mandya, Karnataka",
+  gstin: "29ANHPM1365Q1ZA",
+  phone: "9900389992"
+};
 const productTypes = ["Urea", "DAP", "Potash", "Pesticide", "Seeds", "Micronutrients", "Organic fertilizer"];
 const units = ["Bag", "Kg", "Litre", "Packet"];
 const reportTypes = [
@@ -322,13 +329,13 @@ function Products({ api, notify }) {
 function Billing({ api, notify }) {
   const [products, setProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
-  const [shop, setShop] = useState({});
+  const [shop, setShop] = useState(defaultShop);
   const [invoice, setInvoice] = useState(null);
   const [form, setForm] = useState({ customer_id: "", customer_name: "", mobile: "", village: "", billing_address: "", gstin: "", amount_paid: 0, payment_method: "Cash", items: [] });
   useEffect(() => {
     api.get("/products").then(setProducts);
     api.get("/customers").then(setCustomers);
-    api.get("/shop").then(setShop);
+    api.get("/shop").then((data) => setShop({ ...defaultShop, ...data }));
   }, [api]);
   const addLine = () => setForm({ ...form, items: [...form.items, { product_id: products[0]?.id || "", qty: 1, discount: 0 }] });
   const lines = form.items.map((item) => {
@@ -400,14 +407,15 @@ function Billing({ api, notify }) {
 }
 
 function InvoicePreview({ shop, invoice }) {
+  const shopDetails = { ...defaultShop, ...(shop || {}) };
   return (
     <Panel title="Invoice Preview" actions={<button onClick={() => window.print()} className="icon-btn" title="Print"><Printer className="h-5 w-5" /></button>}>
       <div id="invoice" className="invoice">
         <div className="text-center">
-          <h2 className="text-xl font-bold">{shop.name}</h2>
-          <p>Legal Name: {shop.legalName}</p>
-          <p>{shop.address}</p>
-          <p>GSTIN: {shop.gstin} | Phone: {shop.phone}</p>
+          <h2 className="text-xl font-bold">{shopDetails.name}</h2>
+          <p>Legal Name: {shopDetails.legalName}</p>
+          <p>{shopDetails.address}</p>
+          <p>GSTIN: {shopDetails.gstin} | Phone: {shopDetails.phone}</p>
         </div>
         <div className="mt-4 grid grid-cols-2 border-y border-slate-300 py-2 text-sm">
           <span>Invoice: <b>{invoice.invoice_number}</b></span>
