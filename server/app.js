@@ -64,10 +64,11 @@ app.use("/api", requireAuth);
 
 app.get("/api/shop", (_req, res) => {
   res.json({
-    name: process.env.SHOP_NAME || "Sri Paddy Fertilizers",
+    name: process.env.SHOP_NAME || "SRI ANJANEYA AGRO AGENCIES",
+    legalName: process.env.SHOP_LEGAL_NAME || "JUNJI MARUTHI",
     address: process.env.SHOP_ADDRESS || "Main Road, Mandya, Karnataka",
-    gstin: process.env.SHOP_GSTIN || "29ABCDE1234F1Z5",
-    phone: process.env.SHOP_PHONE || "9876543210"
+    gstin: process.env.SHOP_GSTIN || "29ANHPM1365Q1ZA",
+    phone: process.env.SHOP_PHONE || "9900389992"
   });
 });
 

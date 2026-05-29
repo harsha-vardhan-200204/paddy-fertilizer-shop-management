@@ -105,7 +105,7 @@ function Login({ onLogin }) {
     <div className="grid min-h-screen grid-cols-[1fr_440px] bg-white">
       <section className="flex flex-col justify-between bg-paddy-700 p-12 text-white">
         <div className="flex items-center gap-3 text-xl font-semibold">
-          <Sprout className="h-8 w-8" /> Sri Paddy Fertilizers
+          <Sprout className="h-8 w-8" /> SRI ANJANEYA AGRO AGENCIES
         </div>
         <div className="max-w-3xl">
           <p className="text-sm font-semibold uppercase tracking-[0.18em] text-paddy-100">GST Billing and Inventory</p>
@@ -154,7 +154,7 @@ function Sidebar({ screen, setScreen, user, logout }) {
           <Sprout className="h-6 w-6" />
         </div>
         <div>
-          <p className="font-semibold">Paddy Fertilizers</p>
+          <p className="font-semibold">SRI ANJANEYA AGRO AGENCIES</p>
           <p className="text-xs text-slate-500">India GST Billing</p>
         </div>
       </div>
@@ -405,6 +405,7 @@ function InvoicePreview({ shop, invoice }) {
       <div id="invoice" className="invoice">
         <div className="text-center">
           <h2 className="text-xl font-bold">{shop.name}</h2>
+          <p>Legal Name: {shop.legalName}</p>
           <p>{shop.address}</p>
           <p>GSTIN: {shop.gstin} | Phone: {shop.phone}</p>
         </div>
