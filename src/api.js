@@ -3,6 +3,8 @@ const isLocalApiUrl = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(rawAp
 
 export const API_BASE_URL = import.meta.env.PROD && isLocalApiUrl ? "" : rawApiUrl;
 
+export const API_BASE_URL = import.meta.env.PROD && isLocalApiUrl ? "" : rawApiUrl;
+
 function apiUrl(path) {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   return `${API_BASE_URL}/api${normalizedPath}`;
