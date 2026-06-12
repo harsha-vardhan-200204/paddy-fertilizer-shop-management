@@ -9,19 +9,27 @@ import { randomUUID } from "crypto";
 const app = express();
 const store = await createStore();
 
+let seedError = null;
+let seedStatus = "not-run";
 try {
   const maruthiUser = await store.findUser("maruthi");
   if (!maruthiUser) {
+    seedStatus = "attempting-seed";
     const passwordHash = "$2b$10$CcNhjNItY/2KVDM.P.Rv8ulmM9nLnJrxu80cY6NEwdNkRAGMyn5Su";
     if (store.kind === "postgres") {
       await store.pool.query(
         "insert into users (id, name, username, role, password_hash) values ($1, $2, $3, $4, $5)",
         [randomUUID(), "Maruthi", "maruthi", "admin", passwordHash]
       );
+      seedStatus = "seeded-postgres";
       console.log("Seeded default 'maruthi' user to postgres.");
     }
+  } else {
+    seedStatus = "user-exists";
   }
 } catch (err) {
+  seedError = err.message;
+  seedStatus = "error";
   console.error("Error seeding default user:", err);
 }
 
@@ -60,13 +68,13 @@ app.get("/api/health", asyncRoute(async (_req, res) => {
 app.get("/api/debug-users", asyncRoute(async (_req, res) => {
   try {
     if (store.kind === "local-file") {
-      res.json({ users: (store.db?.users || []).map(u => ({ username: u.username, role: u.role })) });
+      res.json({ users: (store.db?.users || []).map(u => ({ username: u.username, role: u.role })), seedStatus, seedError });
     } else {
       const list = await store.many("select username, role from users");
-      res.json({ users: list });
+      res.json({ users: list, seedStatus, seedError });
     }
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, seedStatus, seedError });
   }
 }));
 
