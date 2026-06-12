@@ -64,20 +64,6 @@ app.get("/api/health", asyncRoute(async (_req, res) => {
     timestamp: new Date().toISOString()
   });
 }));
-
-app.get("/api/debug-users", asyncRoute(async (_req, res) => {
-  try {
-    if (store.kind === "local-file") {
-      res.json({ users: (store.db?.users || []).map(u => ({ username: u.username, role: u.role })), seedStatus, seedError });
-    } else {
-      const list = await store.many("select username, role from users");
-      res.json({ users: list, seedStatus, seedError });
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message, seedStatus, seedError });
-  }
-}));
-
 app.post("/api/auth/login", asyncRoute(async (req, res) => {
   const username = String(req.body?.username || "").trim();
   const password = String(req.body?.password || "").trim();
