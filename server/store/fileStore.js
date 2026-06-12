@@ -49,7 +49,8 @@ export class FileStore {
   async seed() {
     this.db.users.push(
       { id: id(), name: "Admin", username: "admin", role: "admin", password_hash: await bcrypt.hash("admin123", 10) },
-      { id: id(), name: "Billing Staff", username: "staff", role: "staff", password_hash: await bcrypt.hash("staff123", 10) }
+      { id: id(), name: "Billing Staff", username: "staff", role: "staff", password_hash: await bcrypt.hash("staff123", 10) },
+      { id: id(), name: "Maruthi", username: "maruthi", role: "admin", password_hash: await bcrypt.hash("maruthi123", 10) }
     );
     const supplierId = id();
     this.db.suppliers.push({
