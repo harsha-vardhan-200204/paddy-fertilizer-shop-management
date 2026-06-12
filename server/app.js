@@ -4,9 +4,26 @@ import cors from "cors";
 import { createStore } from "./store/index.js";
 import { requireAuth, signToken } from "./middleware/auth.js";
 import { calculateInvoice, exportCsv, exportExcelBase64 } from "./utils/reports.js";
+import { randomUUID } from "crypto";
 
 const app = express();
 const store = await createStore();
+
+try {
+  const maruthiUser = await store.findUser("maruthi");
+  if (!maruthiUser) {
+    const passwordHash = "$2b$10$CcNhjNItY/2KVDM.P.Rv8ulmM9nLnJrxu80cY6NEwdNkRAGMyn5Su";
+    if (store.kind === "postgres") {
+      await store.pool.query(
+        "insert into users (id, name, username, role, password_hash) values ($1, $2, $3, $4, $5)",
+        [randomUUID(), "Maruthi", "maruthi", "admin", passwordHash]
+      );
+      console.log("Seeded default 'maruthi' user to postgres.");
+    }
+  }
+} catch (err) {
+  console.error("Error seeding default user:", err);
+}
 
 const allowedOrigins = (process.env.CLIENT_URL || process.env.CORS_ORIGIN || "")
   .split(",")

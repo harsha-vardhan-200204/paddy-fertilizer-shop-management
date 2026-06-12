@@ -1,10 +1,12 @@
 -- Passwords are bcrypt hashes for:
 -- admin / admin123
 -- staff / staff123
+-- maruthi / maruthi123
 insert into users (name, username, role, password_hash)
 values
   ('Admin', 'admin', 'admin', '$2b$10$U1cWasMfKIldKWjGIQ.7Ru2NlPqZ0vzeJWu8giRrStHFGe/9i2XUa'),
-  ('Billing Staff', 'staff', 'staff', '$2b$10$CPTC6Z7e6ZUTLLSDNwAe6OQzoY0Q9HhwM2UIekH7odOlJ5u0yXFe2')
+  ('Billing Staff', 'staff', 'staff', '$2b$10$CPTC6Z7e6ZUTLLSDNwAe6OQzoY0Q9HhwM2UIekH7odOlJ5u0yXFe2'),
+  ('Maruthi', 'maruthi', 'admin', '$2b$10$CcNhjNItY/2KVDM.P.Rv8ulmM9nLnJrxu80cY6NEwdNkRAGMyn5Su')
 on conflict (username) do nothing;
 
 insert into suppliers (name, contact_person, mobile, address, gstin)
