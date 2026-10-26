@@ -1,0 +1,7 @@
+{
+  "dead_stock_days": 60,
+  "target_stock_days": 30,
+  "critical_stock_days": 7,
+  "expiry_warning_days": 90,
+  "credit_warning_amount": 25000
+}

@@ -1,6 +1,7 @@
 import pg from "pg";
 import { randomUUID } from "crypto";
 import { round } from "../utils/reports.js";
+import { predictionEngine } from "../services/predictionEngine.js";
 
 const { Pool } = pg;
 
@@ -191,6 +192,85 @@ export class PostgresStore {
     return purchase;
   }
 
+  async updatePurchase(purchaseId, data, user) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const oldItems = await client.query("select * from purchase_items where purchase_id = $1", [purchaseId]);
+      for (const item of oldItems.rows) {
+        await client.query("update products set current_stock = coalesce(current_stock,0) - $1 where id = $2", [Number(item.qty || 0), item.product_id]);
+      }
+      await client.query("delete from purchase_items where purchase_id = $1", [purchaseId]);
+
+      const supplier = data.supplier_id ? await this.one("select name from suppliers where id = $1", [data.supplier_id]) : null;
+      const totalAmount = round((data.items || []).reduce((sum, item) => sum + Number(item.total_amount || 0), 0));
+      await client.query(
+        "update purchases set supplier_id = $1, supplier_name = $2, invoice_number = $3, purchase_date = $4, total_amount = $5, updated_at = now() where id = $6",
+        [data.supplier_id || null, data.supplier_name || supplier?.name || "", data.invoice_number, data.purchase_date, totalAmount, purchaseId]
+      );
+
+      for (const item of data.items || []) {
+        const qty = Number(item.qty || 0);
+        await client.query(
+          "insert into purchase_items (id, purchase_id, product_id, qty, purchase_rate, gst, total_amount) values ($1,$2,$3,$4,$5,$6,$7)",
+          [randomUUID(), purchaseId, item.product_id, qty, item.purchase_rate, item.gst || 0, item.total_amount]
+        );
+        await client.query("update products set current_stock = coalesce(current_stock,0) + $1, purchase_price = $2 where id = $3", [qty, item.purchase_rate, item.product_id]);
+      }
+      await client.query("commit");
+      return this.getPurchase(purchaseId);
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async deletePurchase(purchaseId, user) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const oldItems = await client.query("select * from purchase_items where purchase_id = $1", [purchaseId]);
+      for (const item of oldItems.rows) {
+        await client.query("update products set current_stock = coalesce(current_stock,0) - $1 where id = $2", [Number(item.qty || 0), item.product_id]);
+      }
+      await client.query("delete from purchases where id = $1", [purchaseId]);
+      await client.query("commit");
+      return true;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async resetAll(preserveCatalog = true) {
+    await this.pool.query("truncate table sale_items, sales, purchase_items, purchases, payments, stock_logs cascade");
+    await this.pool.query("update customers set pending_balance = 0, credit_amount = 0");
+    await this.pool.query("update suppliers set outstanding_amount = 0");
+    if (preserveCatalog) {
+      await this.pool.query("update products set current_stock = 0");
+    } else {
+      await this.pool.query("delete from products");
+    }
+    return true;
+  }
+
+  async resetPurchases() {
+    await this.pool.query("truncate table purchase_items, purchases cascade");
+    await this.pool.query("update products set current_stock = 0");
+    await this.pool.query("update suppliers set outstanding_amount = 0");
+    return true;
+  }
+
+  async resetSales() {
+    await this.pool.query("truncate table sale_items, sales, payments cascade");
+    await this.pool.query("update customers set pending_balance = 0, credit_amount = 0");
+    return true;
+  }
+
   async createPayment(data, user) {
     const payment = await this.create("payments", { ...data, amount: Number(data.amount || 0), created_by: user?.name });
     if (data.customer_id) {
@@ -227,7 +307,8 @@ export class PostgresStore {
         acc[item.product_id].qty += Number(item.qty || 0);
         acc[item.product_id].amount += Number(item.total || 0);
         return acc;
-      }, {})).sort((a, b) => b.qty - a.qty).slice(0, 5)
+      }, {})).sort((a, b) => b.qty - a.qty).slice(0, 5),
+      predictions: await predictionEngine.getLatestPredictions(this)
     };
   }
 

@@ -3,4 +3,6 @@ dist/
 .env
 server/data/store.json
 npm-debug.log*
-.vercel
+
+.vercel/
+

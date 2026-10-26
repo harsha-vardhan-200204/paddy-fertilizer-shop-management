@@ -3,9 +3,10 @@ import { FileStore } from "./fileStore.js";
 import { PostgresStore } from "./postgresStore.js";
 
 export async function createStore() {
-  const useDatabase = process.env.USE_DATABASE === "1" && process.env.DATABASE_URL;
+  const dbUrl = process.env.PROD_DATABASE_URL || process.env.DATABASE_URL;
+  const useDatabase = (process.env.USE_PROD_DATABASE === "1" || process.env.USE_DATABASE === "1") && dbUrl;
   const store = useDatabase
-    ? new PostgresStore(process.env.DATABASE_URL)
+    ? new PostgresStore(dbUrl)
     : new FileStore();
   await store.init();
   store.verifyPassword = verifyPassword;

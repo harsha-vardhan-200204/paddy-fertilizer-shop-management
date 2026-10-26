@@ -1,0 +1,142 @@
+{
+  "config": {
+    "retrainIntervalHours": 24,
+    "minNewTransactionsToRetrain": 5,
+    "riskDelayThresholdDays": 15,
+    "lastRetrained": "2026-10-06T15:50:11.361Z",
+    "totalSalesCountAtTraining": 27
+  },
+  "predictions": {
+    "sales30Days": 262530,
+    "revenueForecast": {
+      "daily": 8751,
+      "weekly": 65633,
+      "monthly": 262530,
+      "profit": 27134
+    },
+    "productDemand": [
+      {
+        "id": "dcc14fdb-1566-4201-90c1-b25133ee6814",
+        "name": "Coromandel Gromor 14-35-14 (50kg Bag)",
+        "brand": "Coromandel International",
+        "product_type": "Micronutrients",
+        "currentStock": -67,
+        "predictedDemand": 2448,
+        "recommendation": "Reorder 2515",
+        "reorderQty": 2515,
+        "runoutDays": 0,
+        "unit": "Bag"
+      },
+      {
+        "id": "b01ba0f0-1b39-4dc6-accd-728b7deabed9",
+        "name": "MOP Potash 50kg",
+        "brand": "IPL",
+        "product_type": "Potash",
+        "currentStock": -53,
+        "predictedDemand": 2385,
+        "recommendation": "Reorder 2438",
+        "reorderQty": 2438,
+        "runoutDays": 0,
+        "unit": "Bag"
+      },
+      {
+        "id": "8039f754-6393-49d5-92b3-9f5fa32e3612",
+        "name": "Paddy Seeds MTU-1010",
+        "brand": "Nuziveedu",
+        "product_type": "Seeds",
+        "currentStock": -16,
+        "predictedDemand": 720,
+        "recommendation": "Reorder 736",
+        "reorderQty": 736,
+        "runoutDays": 0,
+        "unit": "Packet"
+      },
+      {
+        "id": "e2ca99f4-d287-4d2d-adfc-000e969f4efc",
+        "name": "DAP 50kg",
+        "brand": "Coromandel",
+        "product_type": "DAP",
+        "currentStock": -10,
+        "predictedDemand": 450,
+        "recommendation": "Reorder 460",
+        "reorderQty": 460,
+        "runoutDays": 0,
+        "unit": "Bag"
+      },
+      {
+        "id": "a64efec4-083a-4b25-93c2-39445ec637eb",
+        "name": "Urea 45kg",
+        "brand": "IFFCO",
+        "product_type": "Urea",
+        "currentStock": 82,
+        "predictedDemand": 270,
+        "recommendation": "Reorder 188",
+        "reorderQty": 188,
+        "runoutDays": 9.1,
+        "unit": "Bag"
+      },
+      {
+        "id": "ace95d4f-ac15-42a5-9d71-2d9430b1195c",
+        "name": "Zinc Sulphate 10kg",
+        "brand": "Zuari",
+        "product_type": "Micronutrients",
+        "currentStock": -11,
+        "predictedDemand": 264,
+        "recommendation": "Reorder 275",
+        "reorderQty": 275,
+        "runoutDays": 0,
+        "unit": "Kg"
+      }
+    ],
+    "creditRisks": [
+      {
+        "id": "6fb8ca11-b3ba-413a-9078-1c026330925b",
+        "name": "Harshavardhan JM",
+        "mobile": "8660548244",
+        "village": "",
+        "outstandingAmount": 46996,
+        "averageDelayDays": 0,
+        "riskLevel": "Medium"
+      },
+      {
+        "id": "8093ca29-596e-4fb2-ae9e-d550028d2059",
+        "name": "Suresh V. Pujar (c/o Venkatesh Pujar)",
+        "mobile": "9945012345",
+        "village": "Kariganuru",
+        "outstandingAmount": 0,
+        "averageDelayDays": 0,
+        "riskLevel": "Low"
+      },
+      {
+        "id": "e2499d2b-0ebc-4df2-8ee0-2a675a32ff99",
+        "name": "Harshavardhan JM",
+        "mobile": "8660548244",
+        "village": "",
+        "outstandingAmount": 0,
+        "averageDelayDays": 0,
+        "riskLevel": "Low"
+      },
+      {
+        "id": "2dad310a-6885-4321-a0c1-447c345b65f1",
+        "name": "Mahadeva",
+        "mobile": "9900012345",
+        "village": "Srirangapatna",
+        "outstandingAmount": 0,
+        "averageDelayDays": 0,
+        "riskLevel": "Low"
+      }
+    ],
+    "insights": [
+      "📉 Store sales are predicted to stabilize or decline slightly next month due to seasonal adjustments.",
+      "💰 This month is predicted to achieve higher revenue (₹2,62,530) than last month (₹0).",
+      "⚠️ **Inventory Alert:** Product **Coromandel Gromor 14-35-14 (50kg Bag)** is expected to run out in approximately **0** days. Recommended reorder: **2515 Bags**.",
+      "⚠️ **Inventory Alert:** Product **Urea 45kg** is expected to run out in approximately **9** days. Recommended reorder: **188 Bags**.",
+      "⚠️ **Inventory Alert:** Product **DAP 50kg** is expected to run out in approximately **0** days. Recommended reorder: **460 Bags**."
+    ],
+    "metrics": {
+      "salesMAE": 0,
+      "demandMAE": 0.5,
+      "riskAccuracy": 0.970148091049629
+    }
+  }
+}
