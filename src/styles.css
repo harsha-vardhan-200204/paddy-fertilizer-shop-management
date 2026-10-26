@@ -30,13 +30,6 @@ button:active {
   transform: translateY(1px);
 }
 
-/* Prevent auto-zooming on focus in iOS mobile safari */
-@media (max-width: 640px) {
-  input, select, textarea {
-    font-size: 16px !important;
-  }
-}
-
 th,
 td {
   padding: 10px 12px;
@@ -147,6 +140,96 @@ td {
   border-radius: 6px;
   padding: 18px;
   background: white;
+}
+
+/* =========================================================
+   Mobile-Only Typography & Button Font Size Enhancements
+   Applied exclusively on screen widths <= 768px (Mobile UI)
+   Desktop UI (> 768px) is unaffected
+   ========================================================= */
+@media (max-width: 768px) {
+  /* Increase base font size for higher mobile legibility */
+  html, body {
+    font-size: 15px;
+  }
+
+  /* Increase button font sizes, padding, and tap targets on mobile */
+  .btn,
+  .btn-secondary,
+  button.btn,
+  button.btn-secondary {
+    font-size: 15px !important;
+    min-height: 46px !important;
+    padding-left: 18px !important;
+    padding-right: 18px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.015em;
+  }
+
+  /* Increase all standard action and payment buttons on mobile */
+  button:not(.icon-btn) {
+    font-size: 14.5px;
+  }
+
+  /* Large CTA buttons */
+  button.w-full {
+    font-size: 15.5px !important;
+    min-height: 46px !important;
+  }
+
+  /* Navigation links in mobile sidebar drawer */
+  .nav-item {
+    font-size: 15px !important;
+    padding-top: 12px !important;
+    padding-bottom: 12px !important;
+    gap: 14px !important;
+  }
+
+  /* Form labels and input fields on mobile */
+  label {
+    font-size: 14px !important;
+    font-weight: 600;
+  }
+
+  /* 16px input font size prevents iOS mobile safari auto-zoom shift */
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+    min-height: 44px;
+  }
+
+  .cell-input {
+    font-size: 14.5px !important;
+    min-height: 40px;
+  }
+
+  /* Table typography on mobile */
+  th {
+    font-size: 13px !important;
+    padding: 12px 14px !important;
+  }
+
+  td {
+    font-size: 14px !important;
+    padding: 12px 14px !important;
+  }
+
+  /* Text links */
+  .link {
+    font-size: 14.5px !important;
+  }
+
+  /* Mobile bottom bar navigation icons & text labels */
+  nav.fixed.bottom-0 button span {
+    font-size: 12px !important;
+    font-weight: 700 !important;
+  }
+
+  nav.fixed.bottom-0 button svg {
+    width: 22px !important;
+    height: 22px !important;
+  }
 }
 
 @media print {
