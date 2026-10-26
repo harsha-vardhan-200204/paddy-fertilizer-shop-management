@@ -10,6 +10,7 @@ import {
   IndianRupee,
   LayoutDashboard,
   LogOut,
+  Menu,
   PackagePlus,
   Plus,
   Printer,
@@ -61,6 +62,7 @@ function App() {
   const [session, setSession] = useState(() => JSON.parse(localStorage.getItem("paddy-session") || "null"));
   const [screen, setScreen] = useState("dashboard");
   const [toast, setToast] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const api = useMemo(() => createApi(session?.token, () => setSession(null)), [session?.token]);
 
@@ -73,10 +75,27 @@ function App() {
 
   return (
     <div className="min-h-screen bg-paddy-50 text-slate-900">
-      <Sidebar screen={screen} setScreen={setScreen} user={session.user} logout={() => setSession(null)} />
-      <main className="min-h-screen pl-[264px]">
-        <Header screen={screen} />
-        <div className="px-8 pb-10 pt-6">
+      {/* Mobile Drawer Backdrop */}
+      {sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-sm lg:hidden transition-opacity"
+        />
+      )}
+
+      {/* Sidebar Drawer */}
+      <Sidebar
+        screen={screen}
+        setScreen={setScreen}
+        user={session.user}
+        logout={() => setSession(null)}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      />
+
+      <main className="min-h-screen lg:pl-[264px] flex flex-col pb-20 lg:pb-8 transition-all">
+        <Header screen={screen} onToggleSidebar={() => setSidebarOpen((prev) => !prev)} />
+        <div className="w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 flex-1">
           {screen === "dashboard" && <Dashboard api={api} setScreen={setScreen} />}
           {screen === "products" && <Products api={api} notify={setToast} />}
           {screen === "billing" && <Billing api={api} notify={setToast} />}
@@ -90,7 +109,51 @@ function App() {
           {screen === "reset" && <BusinessReset api={api} notify={setToast} setScreen={setScreen} user={session.user} />}
         </div>
       </main>
-      {toast && <div className="fixed bottom-6 right-6 rounded-md bg-paddy-700 px-4 py-3 text-white shadow-soft">{toast}</div>}
+
+      {/* Mobile Bottom Quick-Navigation Bar */}
+      <nav className="fixed bottom-0 left-0 right-0 z-30 flex h-16 items-center justify-around border-t border-slate-200 bg-white/95 px-1 sm:px-2 shadow-[0_-4px_16px_rgba(0,0,0,0.06)] backdrop-blur-md lg:hidden">
+        <button
+          onClick={() => { setScreen("dashboard"); setSidebarOpen(false); }}
+          className={`flex flex-col items-center justify-center gap-1 py-1 px-2 text-xs font-semibold ${screen === "dashboard" ? "text-paddy-700 font-bold" : "text-slate-500"}`}
+        >
+          <LayoutDashboard className="h-5 w-5" />
+          <span className="text-[11px]">Dashboard</span>
+        </button>
+        <button
+          onClick={() => { setScreen("billing"); setSidebarOpen(false); }}
+          className={`flex flex-col items-center justify-center gap-1 py-1 px-2 text-xs font-semibold ${screen === "billing" ? "text-paddy-700 font-bold" : "text-slate-500"}`}
+        >
+          <ReceiptText className="h-5 w-5" />
+          <span className="text-[11px]">Billing</span>
+        </button>
+        <button
+          onClick={() => { setScreen("products"); setSidebarOpen(false); }}
+          className={`flex flex-col items-center justify-center gap-1 py-1 px-2 text-xs font-semibold ${screen === "products" ? "text-paddy-700 font-bold" : "text-slate-500"}`}
+        >
+          <Boxes className="h-5 w-5" />
+          <span className="text-[11px]">Products</span>
+        </button>
+        <button
+          onClick={() => { setScreen("customers"); setSidebarOpen(false); }}
+          className={`flex flex-col items-center justify-center gap-1 py-1 px-2 text-xs font-semibold ${screen === "customers" ? "text-paddy-700 font-bold" : "text-slate-500"}`}
+        >
+          <UserRound className="h-5 w-5" />
+          <span className="text-[11px]">Farmers</span>
+        </button>
+        <button
+          onClick={() => setSidebarOpen(true)}
+          className="flex flex-col items-center justify-center gap-1 py-1 px-2 text-xs font-semibold text-slate-500 hover:text-slate-800"
+        >
+          <Menu className="h-5 w-5" />
+          <span className="text-[11px]">Menu</span>
+        </button>
+      </nav>
+
+      {toast && (
+        <div className="fixed bottom-20 lg:bottom-6 right-4 sm:right-6 left-4 sm:left-auto z-50 rounded-lg bg-paddy-700 px-4 py-3 text-white shadow-soft text-center sm:text-left text-sm font-semibold">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }
@@ -137,33 +200,35 @@ function Login({ onLogin }) {
     }
   }
   return (
-    <div className="grid min-h-screen grid-cols-[1fr_440px] bg-white">
-      <section className="flex flex-col justify-between bg-paddy-700 p-12 text-white">
-        <div className="flex items-center gap-3 text-xl font-semibold">
-          <Sprout className="h-8 w-8" /> SRI ANJANEYA AGRO AGENCIES
+    <div className="min-h-screen flex flex-col lg:grid lg:grid-cols-[1.1fr_420px] bg-white">
+      <section className="flex flex-col justify-between bg-paddy-700 p-6 sm:p-10 lg:p-12 text-white">
+        <div className="flex items-center gap-3 text-lg sm:text-xl font-bold">
+          <Sprout className="h-7 w-7 text-paddy-100" /> SRI ANJANEYA AGRO AGENCIES
         </div>
-        <div className="max-w-3xl">
-          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-paddy-100">GST Billing and Inventory</p>
-          <h1 className="mt-5 text-5xl font-semibold leading-tight">Fertilizer shop operations, from invoice to audit.</h1>
-          <p className="mt-5 max-w-2xl text-lg text-paddy-100">
+        <div className="my-6 lg:my-auto max-w-2xl">
+          <p className="text-xs sm:text-sm font-semibold uppercase tracking-[0.18em] text-paddy-100">GST Billing & Inventory System</p>
+          <h1 className="mt-3 sm:mt-5 text-2xl sm:text-4xl lg:text-5xl font-bold leading-tight">Fertilizer shop operations, from invoice to audit.</h1>
+          <p className="mt-3 sm:mt-5 text-sm sm:text-base lg:text-lg text-paddy-100 leading-relaxed">
             Products, batch stock, farmer credit ledger, purchase inward, GST summaries, and printable bills in one clean counter-friendly system.
           </p>
         </div>
-        <div className="grid grid-cols-3 gap-4 text-sm text-paddy-100">
-          <span>Auto invoice numbers</span>
-          <span>CGST + SGST split</span>
-          <span>Low stock and expiry alerts</span>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 text-xs sm:text-sm text-paddy-100 pt-4 border-t border-paddy-600/50">
+          <span className="flex items-center gap-1.5">✓ Auto invoice numbers</span>
+          <span className="flex items-center gap-1.5">✓ CGST + SGST split</span>
+          <span className="flex items-center gap-1.5">✓ Low stock & expiry alerts</span>
         </div>
       </section>
-      <section className="flex items-center px-10">
-        <form onSubmit={submit} className="w-full">
-          <h2 className="text-3xl font-semibold">Login</h2>
-          <p className="mt-2 text-slate-500"></p>
+      <section className="flex items-center justify-center p-6 sm:p-10 bg-slate-50/50 lg:bg-white flex-1">
+        <form onSubmit={submit} className="w-full max-w-sm bg-white p-6 sm:p-8 rounded-xl shadow-soft lg:shadow-none border border-slate-100 lg:border-none">
+          <div className="mb-6">
+            <h2 className="text-2xl sm:text-3xl font-bold text-slate-900">Sign In</h2>
+            <p className="mt-1 text-xs sm:text-sm text-slate-500">Access shop counter billing and inventory</p>
+          </div>
           <Input label="Username" value={form.username} onChange={(username) => setForm({ ...form, username })} />
           <Input label="Password" type="password" value={form.password} onChange={(password) => setForm({ ...form, password })} />
-          {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
-          <button className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-md bg-paddy-600 px-4 font-semibold text-white">
-            <UserRound className="h-5 w-5" /> Login
+          {error && <p className="mt-3 text-xs sm:text-sm text-red-600 font-semibold">{error}</p>}
+          <button className="mt-6 flex h-11 sm:h-12 w-full items-center justify-center gap-2 rounded-md bg-paddy-600 px-4 font-bold text-white shadow-sm hover:bg-paddy-700">
+            <UserRound className="h-5 w-5" /> Login to Counter
           </button>
         </form>
       </section>
@@ -171,7 +236,7 @@ function Login({ onLogin }) {
   );
 }
 
-function Sidebar({ screen, setScreen, user, logout }) {
+function Sidebar({ screen, setScreen, user, logout, isOpen, onClose }) {
   const isAdmin = user?.role === "admin" || user?.role === "owner";
   const items = [
     ["dashboard", LayoutDashboard, "Dashboard"],
@@ -187,27 +252,47 @@ function Sidebar({ screen, setScreen, user, logout }) {
     ...(isAdmin ? [["reset", ShieldAlert, "Business Reset"]] : [])
   ];
   return (
-    <aside className="fixed left-0 top-0 flex h-screen w-[264px] flex-col bg-white px-4 py-5 shadow-soft">
-      <div className="mb-6 flex shrink-0 items-center gap-3 px-2">
-        <div className="grid h-11 w-11 place-items-center rounded-md bg-paddy-600 text-white">
-          <Sprout className="h-6 w-6" />
+    <aside
+      className={`fixed top-0 bottom-0 left-0 z-50 flex h-screen w-[264px] flex-col bg-white px-4 py-5 shadow-soft transition-transform duration-300 ease-in-out ${
+        isOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+      }`}
+    >
+      <div className="mb-6 flex shrink-0 items-center justify-between px-2">
+        <div className="flex items-center gap-3">
+          <div className="grid h-10 w-10 place-items-center rounded-lg bg-paddy-600 text-white shadow-sm">
+            <Sprout className="h-6 w-6" />
+          </div>
+          <div>
+            <p className="font-bold text-slate-900 leading-tight">SmartAgro ERP</p>
+            <p className="text-xs text-slate-500">Integrated GST System</p>
+          </div>
         </div>
-        <div>
-          <p className="font-semibold text-slate-900">SmartAgro ERP</p>
-          <p className="text-xs text-slate-500">Integrated GST System</p>
-        </div>
+        <button
+          onClick={onClose}
+          className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 lg:hidden"
+          title="Close Navigation"
+        >
+          <X className="h-5 w-5" />
+        </button>
       </div>
       <nav className="flex-1 overflow-y-auto space-y-1 pr-1.5 custom-scrollbar">
         {items.map(([key, Icon, label]) => (
-          <button key={key} onClick={() => setScreen(key)} className={`nav-item ${screen === key ? "active" : ""}`}>
+          <button
+            key={key}
+            onClick={() => {
+              setScreen(key);
+              onClose?.();
+            }}
+            className={`nav-item ${screen === key ? "active" : ""}`}
+          >
             <Icon className="h-5 w-5 shrink-0" /> <span className="truncate">{label}</span>
           </button>
         ))}
       </nav>
-      <div className="mt-4 shrink-0 rounded-md border border-paddy-100 bg-paddy-50 p-3">
-        <p className="font-medium text-slate-900">{user.name}</p>
-        <p className="text-sm capitalize text-slate-500">{user.role}</p>
-        <button onClick={logout} className="mt-3 flex items-center gap-2 text-sm font-medium text-paddy-700 hover:text-paddy-800">
+      <div className="mt-4 shrink-0 rounded-lg border border-paddy-100 bg-paddy-50 p-3">
+        <p className="font-semibold text-slate-900">{user.name}</p>
+        <p className="text-xs capitalize font-medium text-slate-500">{user.role}</p>
+        <button onClick={logout} className="mt-3 flex items-center gap-2 text-xs font-bold text-paddy-700 hover:text-paddy-800">
           <LogOut className="h-4 w-4" /> Logout
         </button>
       </div>
@@ -215,27 +300,39 @@ function Sidebar({ screen, setScreen, user, logout }) {
   );
 }
 
-function Header({ screen }) {
+function Header({ screen, onToggleSidebar }) {
   const titles = {
     dashboard: "Dashboard",
     products: "Product Management",
     billing: "Sales Billing",
     purchases: "Purchase Management",
-    customers: "Customer / Farmer Records",
+    customers: "Farmer Records",
     suppliers: "Supplier Management",
+    farmer_payments: "Payment Records",
     stock: "Stock Management",
     reports: "GST Reports",
     insights: "Business Insights & Decision Support",
     reset: "System Security & Business Reset"
   };
   return (
-    <header className="sticky top-0 z-10 flex h-20 items-center justify-between border-b border-paddy-100 bg-white px-8">
-      <div>
-        <h1 className="text-2xl font-semibold">{titles[screen]}</h1>
-        <p className="text-sm text-slate-500">Fast counter operations with audit-ready records</p>
+    <header className="sticky top-0 z-20 flex h-16 sm:h-20 items-center justify-between border-b border-paddy-100 bg-white/95 px-3 sm:px-6 lg:px-8 backdrop-blur-md shadow-sm">
+      <div className="flex items-center gap-3 min-w-0">
+        <button
+          onClick={onToggleSidebar}
+          className="inline-flex items-center justify-center rounded-lg p-2 text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus:outline-none lg:hidden"
+          title="Open Navigation"
+        >
+          <Menu className="h-6 w-6" />
+        </button>
+        <div className="min-w-0">
+          <h1 className="text-lg sm:text-2xl font-bold text-slate-900 truncate">{titles[screen] || "SmartAgro"}</h1>
+          <p className="hidden sm:block text-xs text-slate-500">Fast counter operations with audit-ready records</p>
+        </div>
       </div>
-      <div className="flex items-center gap-2 rounded-md bg-paddy-50 px-3 py-2 text-sm font-medium text-paddy-700">
-        <Building2 className="h-4 w-4" /> GST-ready shop system
+      <div className="flex items-center gap-2">
+        <div className="hidden sm:flex items-center gap-1.5 rounded-full bg-paddy-50 border border-paddy-200 px-3 py-1 text-xs font-semibold text-paddy-700">
+          <Building2 className="h-3.5 w-3.5" /> GST-ready shop system
+        </div>
       </div>
     </header>
   );
@@ -260,7 +357,7 @@ function Dashboard({ api, setScreen }) {
   ];
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         {stats.map(([label, value, Icon]) => (
           <Stat key={label} label={label} value={currency.format(value)} Icon={Icon} />
         ))}
@@ -335,7 +432,7 @@ function Dashboard({ api, setScreen }) {
           </div>
         </section>
       )}
-      <div className="grid grid-cols-[1.35fr_0.9fr] gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[1.35fr_0.9fr] gap-6">
         <Panel title="Top Selling Products">
           <div className="h-72">
             <ResponsiveContainer>
@@ -478,7 +575,7 @@ function Products({ api, notify }) {
     load();
   }
   return (
-    <div className="grid grid-cols-[410px_1fr] gap-6">
+    <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] xl:grid-cols-[410px_1fr] gap-6">
       <Panel title={editing ? "Edit Product" : "Add Product"}>
         {/* // Receipt File Scanner Button for Auto-filling Product Details */}
         <div className="mb-3 rounded-lg border border-paddy-200 bg-paddy-50 p-3">
@@ -745,7 +842,7 @@ function Billing({ api, notify }) {
   }
 
   return (
-    <div className="grid grid-cols-[1fr_420px] gap-6">
+    <div className="grid grid-cols-1 xl:grid-cols-[1fr_420px] gap-6">
       <Panel title="New GST Invoice">
         <div className="grid grid-cols-3 gap-3">
           <Select label="Existing Farmer" value={form.customer_id} options={["", ...customers.map((c) => c.id)]} labels={{ "": "Walk-in customer", ...Object.fromEntries(customers.map((c) => [c.id, `${c.name} - ${c.mobile}`])) }} onChange={(customer_id) => {
@@ -758,7 +855,7 @@ function Billing({ api, notify }) {
           <Input label="Billing Address" value={form.billing_address} onChange={(billing_address) => setForm({ ...form, billing_address })} />
           <Input label="DBT / Farmer ID" value={form.gstin} onChange={(gstin) => setForm({ ...form, gstin })} />
         </div>
-        <div className="mt-5 overflow-hidden rounded-md border border-slate-200">
+        <div className="mt-5 overflow-x-auto rounded-md border border-slate-200 custom-scrollbar">
           <table className="w-full text-sm">
             <thead className="bg-paddy-50 text-left">
               <tr><th>Product</th><th>Qty</th><th>Rate</th><th>Discount</th><th>Tax %</th><th>CGST</th><th>SGST</th><th>Total</th></tr>
@@ -786,7 +883,7 @@ function Billing({ api, notify }) {
             <WalletCards className="h-5 w-5" /> Payment & Checkout
           </h3>
           
-          <div className="grid grid-cols-4 gap-3 mb-6">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3 mb-6">
             {["UPI", "Card", "Cash", "Credit", "Mixed"].map(method => (
               <button 
                 key={method}
@@ -1418,7 +1515,7 @@ function Customers({ api, notify }) {
 
   return (
     <>
-      <div className="grid grid-cols-[380px_1fr] gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] xl:grid-cols-[380px_1fr] gap-6">
         <Panel title={editing ? "Edit Farmer Record" : "Add Farmer Record"}>
           <Input label="Farmer Name" value={form.name} onChange={(name) => setForm({ ...form, name })} />
           <Input label="Mobile Number" value={form.mobile} onChange={(mobile) => setForm({ ...form, mobile })} />
@@ -1512,7 +1609,7 @@ function Suppliers({ api, notify }) {
   }
 
   return (
-    <div className="grid grid-cols-[380px_1fr] gap-6">
+    <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] xl:grid-cols-[380px_1fr] gap-6">
       <Panel title={editing ? "Edit Supplier Record" : "Add Supplier Record"}>
         <div className="mb-4 rounded-lg border border-paddy-200 bg-paddy-50 p-3">
           <label className="text-xs font-bold text-paddy-900 block mb-1">📄 Auto-Fill from PDF / CSV File</label>
@@ -1571,7 +1668,7 @@ function CrudPage({ api, resource, title, blank, columns, notify }) {
     load();
   }
   return (
-    <div className="grid grid-cols-[380px_1fr] gap-6">
+    <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] xl:grid-cols-[380px_1fr] gap-6">
       <Panel title={editing ? `Edit ${title}` : `Add ${title}`}>
         {Object.keys(blank).map((key) => <Input key={key} label={labelize(key)} type={typeof blank[key] === "number" ? "number" : "text"} value={form[key] ?? ""} onChange={(value) => setForm({ ...form, [key]: value })} />)}
         <button onClick={save} className="btn mt-5 w-full"><Save className="h-5 w-5" /> Save</button>
@@ -1685,8 +1782,8 @@ function FarmerPayments({ api, notify }) {
   return (
     <div className="space-y-6">
       {/* Top Controls & Navigation Bar */}
-      <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-        <div className="flex gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+        <div className="flex flex-wrap gap-2 sm:gap-4">
           <button 
             onClick={() => setTab("records")} 
             className={`px-4 py-2 font-bold transition-all ${tab === "records" ? "text-paddy-700 border-b-2 border-paddy-700 bg-paddy-50/50" : "text-slate-500 hover:text-slate-800"}`}
@@ -1712,7 +1809,7 @@ function FarmerPayments({ api, notify }) {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-4">
         <Mini label="Total Collected" value={currency.format(totalCollected)} />
         <Mini label="UPI Payments" value={currency.format(upiCollected)} />
         <Mini label="Card Payments" value={currency.format(cardCollected)} />
@@ -2053,7 +2150,7 @@ function Stock({ api, notify }) {
   return (
     <div className="space-y-6">
       <Panel title="Stock Adjustment">
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <Select label="Product" value={adjust.product_id} options={["", ...products.map((p) => p.id)]} labels={{ "": "Select product", ...Object.fromEntries(products.map((p) => [p.id, p.name])) }} onChange={(product_id) => setAdjust({ ...adjust, product_id })} />
           <Input label="Qty (+ inward / - outward)" type="number" value={adjust.qty} onChange={(qty) => setAdjust({ ...adjust, qty })} />
           <Select label="Type" value={adjust.type} options={["adjustment", "damage", "return", "opening"]} onChange={(type) => setAdjust({ ...adjust, type })} />
@@ -2061,7 +2158,7 @@ function Stock({ api, notify }) {
         </div>
         <button onClick={save} className="btn mt-4"><Save className="h-5 w-5" /> Save Adjustment</button>
       </Panel>
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Panel title="Current Stock"><DataTable rows={products} columns={["name", "batch_number", "current_stock", "minimum_stock_alert", "unit", "expiry_date"]} /></Panel>
         <Panel title="Expiry Alerts"><DataTable rows={expiring} columns={["name", "batch_number", "current_stock", "expiry_date"]} empty="No upcoming expiry alerts." /></Panel>
       </div>
@@ -2091,7 +2188,7 @@ function Reports({ api, notify }) {
   return (
     <div className="space-y-6">
       <Panel title="Report Filters">
-        <div className="grid grid-cols-[260px_180px_180px_auto_auto_auto] items-end gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 items-end gap-3">
           <Select label="Report" value={type} options={reportTypes.map(([key]) => key)} labels={Object.fromEntries(reportTypes)} onChange={setType} />
           <Input label="From" type="date" value={dates.from} onChange={(from) => setDates({ ...dates, from })} />
           <Input label="To" type="date" value={dates.to} onChange={(to) => setDates({ ...dates, to })} />
@@ -2110,12 +2207,12 @@ function Stat({ label, value, Icon }) {
 }
 
 function Panel({ title, actions, children }) {
-  return <section className="rounded-md border border-paddy-100 bg-white p-5 shadow-soft"><div className="mb-4 flex items-center justify-between gap-4"><h2 className="text-lg font-semibold">{title}</h2>{actions}</div>{children}</section>;
+  return <section className="rounded-md border border-paddy-100 bg-white p-4 sm:p-5 shadow-soft"><div className="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"><h2 className="text-base sm:text-lg font-bold text-slate-900">{title}</h2>{actions}</div>{children}</section>;
 }
 
 function DataTable({ rows, columns, actions, empty = "No records found." }) {
   if (!rows?.length) return <p className="rounded-md bg-slate-50 p-5 text-sm text-slate-500">{empty}</p>;
-  return <div className="max-h-[560px] overflow-auto rounded-md border border-slate-200"><table className="w-full text-sm"><thead className="sticky top-0 bg-paddy-50 text-left"><tr>{columns.map((c) => <th key={c}>{labelize(c)}</th>)}{actions && <th>Action</th>}</tr></thead><tbody>{rows.map((row) => <tr key={row.id || JSON.stringify(row)}>{columns.map((c) => <td key={c}>{format(row[c])}</td>)}{actions && <td>{actions(row)}</td>}</tr>)}</tbody></table></div>;
+  return <div className="w-full max-h-[560px] overflow-auto custom-scrollbar rounded-md border border-slate-200"><table className="w-full text-sm min-w-[550px]"><thead className="sticky top-0 bg-paddy-50 text-left z-10"><tr>{columns.map((c) => <th key={c} className="whitespace-nowrap">{labelize(c)}</th>)}{actions && <th className="whitespace-nowrap">Action</th>}</tr></thead><tbody>{rows.map((row) => <tr key={row.id || JSON.stringify(row)} className="hover:bg-slate-50/70 transition-colors">{columns.map((c) => <td key={c} className="whitespace-nowrap">{format(row[c])}</td>)}{actions && <td className="whitespace-nowrap">{actions(row)}</td>}</tr>)}</tbody></table></div>;
 }
 
 function Input({ label, value, onChange, type = "text" }) {
@@ -2127,7 +2224,7 @@ function Select({ label, value, options, labels = {}, onChange }) {
 }
 
 function SearchBox({ value, setValue }) {
-  return <div className="flex h-10 items-center gap-2 rounded-md border border-slate-200 px-3"><Search className="h-4 w-4 text-slate-400" /><input className="outline-none" placeholder="Search" value={value} onChange={(e) => setValue(e.target.value)} /></div>;
+  return <div className="flex h-10 w-full sm:w-auto min-w-[200px] items-center gap-2 rounded-md border border-slate-200 px-3 bg-white"><Search className="h-4 w-4 text-slate-400 shrink-0" /><input className="outline-none w-full text-xs sm:text-sm bg-transparent" placeholder="Search" value={value} onChange={(e) => setValue(e.target.value)} /></div>;
 }
 
 function Mini({ label, value }) {

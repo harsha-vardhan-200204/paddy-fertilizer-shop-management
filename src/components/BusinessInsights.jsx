@@ -345,7 +345,7 @@ export default function BusinessInsights({ api, notify, setScreen }) {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           <button onClick={loadData} title="Refresh Analytics" className="btn-secondary px-3 py-1.5 text-xs">
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
           </button>
