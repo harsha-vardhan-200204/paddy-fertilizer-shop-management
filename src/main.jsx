@@ -861,7 +861,11 @@ function Billing({ api, notify }) {
       }
     }
 
-    notify("Payment Successful! Receipt generated.");
+    if (saved.balance_due > 0) {
+      notify(`Receipt generated! Leftover product balance of ${currency.format(saved.balance_due)} recorded in Customer Credit Outstanding.`);
+    } else {
+      notify("Payment Successful! Receipt generated.");
+    }
     setTimeout(() => notify(""), 2200);
   }
 
@@ -1056,6 +1060,21 @@ function Billing({ api, notify }) {
                   </div>
                   <Input label="Amount Tendered (₹)" type="number" value={form.amount_paid} onChange={val => setForm({...form, amount_paid: val})} />
                 </div>
+                {Number(form.amount_paid || 0) < grand && form.amount_paid !== "" && (
+                  <div className="bg-amber-50 p-3.5 rounded-lg border border-amber-300 text-xs text-amber-950 space-y-2 shadow-sm">
+                    <div className="flex items-center gap-1.5 font-bold text-amber-900">
+                      <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                      <span>Leftover Product Balance: ₹{(grand - Number(form.amount_paid || 0)).toFixed(2)}</span>
+                    </div>
+                    <p className="text-amber-900 leading-relaxed">
+                      This unpaid product balance will be stored in <strong>Credit Outstanding</strong> for <strong>{form.customer_name || "farmer"}</strong>. Interest @ <strong>{form.interest_rate || 2}%/month</strong> will accrue from today ({new Date().toLocaleDateString('en-IN')}).
+                    </p>
+                    <div className="grid grid-cols-2 gap-3 pt-1">
+                      <Input label="Credit Due Days" type="number" value={form.credit_days} onChange={v => setForm({...form, credit_days: v})} />
+                      <Input label="Interest Rate % (monthly)" type="number" value={form.interest_rate} onChange={v => setForm({...form, interest_rate: v})} />
+                    </div>
+                  </div>
+                )}
                 <button onClick={saveInvoice} className="btn w-full text-base py-3 mt-4">Complete Cash Payment & Receipt</button>
               </div>
             )}
@@ -1578,6 +1597,7 @@ function Customers({ api, notify }) {
               <div className="flex gap-2">
                 <button className="link" onClick={() => viewHistory(row)}>History</button>
                 <button className="link" onClick={() => { setEditing(row.id); setForm(row); }}>Edit</button>
+                <button className="link font-bold text-amber-700 hover:text-amber-800" onClick={() => notify("Tip: Switch to Payment Records -> Credit Outstanding to view or manage credit for " + row.name)}>Credit Dues</button>
               </div>
             )}
           />
@@ -1729,15 +1749,28 @@ function getCustomerCreditSummary(customer, creditLedger = [], sales = []) {
   if (!customer) return { principal: 0, accruedInterest: 0, totalOutstanding: 0, breakdown: [] };
   const custId = customer.id;
   const custName = (customer.name || "").trim().toLowerCase();
-  
-  // 1. Gather all credit ledger entries matching customer_id, farmer_id, or farmer_name
+  const profilePending = Math.round(Number(customer.pending_balance || 0) * 100) / 100;
+
+  // If customer has 0 or cleared balance, return 0 dues immediately
+  if (profilePending <= 0) {
+    return {
+      principal: 0,
+      accruedInterest: 0,
+      totalOutstanding: 0,
+      breakdown: []
+    };
+  }
+
+  // Find active credit ledger entries for this farmer
   let entries = (creditLedger || []).filter(l => 
-    (l.customer_id && l.customer_id === custId) || 
-    (l.farmer_id && l.farmer_id === custId) || 
-    (l.farmer_name && custName && l.farmer_name.trim().toLowerCase() === custName)
+    ((l.customer_id && l.customer_id === custId) || 
+     (l.farmer_id && l.farmer_id === custId) || 
+     (l.farmer_name && custName && l.farmer_name.trim().toLowerCase() === custName)) &&
+    Number(l.outstanding_principal || l.credit_amount || 0) > 0 &&
+    l.status !== "CLEARED"
   );
 
-  // 2. Fallback to sales with balance_due > 0 if not present in ledger
+  // If no ledger entries, fallback to sales with balance_due > 0
   if (!entries.length && (sales || []).length) {
     const creditSales = sales.filter(s => 
       ((s.customer_id && s.customer_id === custId) || (s.customer_name && custName && s.customer_name.trim().toLowerCase() === custName)) &&
@@ -1762,17 +1795,22 @@ function getCustomerCreditSummary(customer, creditLedger = [], sales = []) {
     });
   }
 
+  // Sort descending by purchase_date (most recent bills first)
+  entries.sort((a, b) => String(b.purchase_date || b.created_at).localeCompare(String(a.purchase_date || a.created_at)));
+
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  let totalPrincipal = 0;
+  let remainingToAllocate = profilePending;
   let totalInterest = 0;
   const breakdown = [];
 
   for (const entry of entries) {
-    const principal = Number(entry.outstanding_principal ?? entry.principal_amount ?? entry.credit_amount ?? 0);
-    if (principal <= 0 && entry.status === "CLEARED") continue;
-    
+    if (remainingToAllocate <= 0) break;
+    const entryOriginal = Number(entry.outstanding_principal ?? entry.principal_amount ?? entry.credit_amount ?? 0);
+    const principalForThisBill = Math.min(entryOriginal, remainingToAllocate);
+    if (principalForThisBill <= 0) continue;
+
     const rate = Number(entry.interest_rate || 2);
     const pDateStr = entry.purchase_date || entry.credit_date || (entry.created_at ? entry.created_at.slice(0, 10) : "");
     const pDate = pDateStr ? new Date(pDateStr) : new Date();
@@ -1781,11 +1819,11 @@ function getCustomerCreditSummary(customer, creditLedger = [], sales = []) {
     const diffMs = Math.max(0, today.getTime() - pDate.getTime());
     const daysElapsed = Math.floor(diffMs / (1000 * 60 * 60 * 24));
     
-    // Simple Interest from purchase date: Principal * (Rate% / 100) * (daysElapsed / 30)
-    const accruedInterest = principal > 0 ? Math.round(principal * (rate / 100) * (daysElapsed / 30) * 100) / 100 : 0;
+    // Monthly simple interest: Principal * (Rate% / 100) * (daysElapsed / 30)
+    const accruedInterest = Math.round(principalForThisBill * (rate / 100) * (daysElapsed / 30) * 100) / 100;
     
-    totalPrincipal += principal;
     totalInterest += accruedInterest;
+    remainingToAllocate = Math.round((remainingToAllocate - principalForThisBill) * 100) / 100;
 
     breakdown.push({
       ...entry,
@@ -1793,24 +1831,34 @@ function getCustomerCreditSummary(customer, creditLedger = [], sales = []) {
       purchase_date: pDateStr || new Date().toISOString().slice(0, 10),
       daysElapsed,
       rate,
-      principal,
+      principal: principalForThisBill,
       accruedInterest,
-      totalDue: Math.round((principal + accruedInterest) * 100) / 100
+      totalDue: Math.round((principalForThisBill + accruedInterest) * 100) / 100
     });
   }
 
-  const profilePending = Number(customer.pending_balance || 0);
-  if (profilePending > totalPrincipal && totalPrincipal === 0) {
-    totalPrincipal = profilePending;
-    totalInterest = Math.round(profilePending * 0.02 * 100) / 100;
-  } else if (totalPrincipal === 0 && profilePending > 0) {
-    totalPrincipal = profilePending;
+  // If there is still unallocated balance from earlier purchases or opening credit
+  if (remainingToAllocate > 0) {
+    const legacyDays = 30;
+    const legacyRate = 2;
+    const legacyInterest = Math.round(remainingToAllocate * (legacyRate / 100) * (legacyDays / 30) * 100) / 100;
+    totalInterest += legacyInterest;
+    breakdown.push({
+      id: "legacy",
+      invoice_id: "CREDIT-BALANCE",
+      purchase_date: "Previous Dues",
+      daysElapsed: legacyDays,
+      rate: legacyRate,
+      principal: remainingToAllocate,
+      accruedInterest: legacyInterest,
+      totalDue: Math.round((remainingToAllocate + legacyInterest) * 100) / 100
+    });
   }
 
   return {
-    principal: Math.round(totalPrincipal * 100) / 100,
+    principal: profilePending,
     accruedInterest: Math.round(totalInterest * 100) / 100,
-    totalOutstanding: Math.round((totalPrincipal + totalInterest) * 100) / 100,
+    totalOutstanding: Math.round((profilePending + totalInterest) * 100) / 100,
     breakdown
   };
 }
@@ -1867,6 +1915,15 @@ function FarmerPayments({ api, notify }) {
   const [ledgerCustomer, setLedgerCustomer] = useState(null);
   const [reminderCustomer, setReminderCustomer] = useState(null);
   const [reminderCopied, setReminderCopied] = useState(false);
+  const [creditModalOpen, setCreditModalOpen] = useState(false);
+  const [creditForm, setCreditForm] = useState({
+    customer_id: "",
+    amount: "",
+    date: new Date().toISOString().slice(0, 10),
+    credit_days: 30,
+    interest_rate: 2,
+    notes: ""
+  });
   const [payForm, setPayForm] = useState({
     amount: "",
     method: "CASH",
@@ -1947,6 +2004,74 @@ function FarmerPayments({ api, notify }) {
     setReminderCopied(false);
   };
 
+  const openAddCreditForCustomer = (cust) => {
+    setCreditForm({
+      customer_id: cust ? cust.id : "",
+      amount: "",
+      date: new Date().toISOString().slice(0, 10),
+      credit_days: 30,
+      interest_rate: 2,
+      notes: ""
+    });
+    setCreditModalOpen(true);
+  };
+
+  const handleAddCreditSubmit = async () => {
+    if (!creditForm.customer_id) {
+      notify("Please select a farmer account.");
+      return;
+    }
+    const amt = Number(creditForm.amount);
+    if (isNaN(amt) || amt <= 0) {
+      notify("Please enter a valid credit amount.");
+      return;
+    }
+
+    const selectedCust = customers.find(c => c.id === creditForm.customer_id);
+    if (!selectedCust) return;
+
+    try {
+      const creditDays = Number(creditForm.credit_days || 30);
+      const interestRate = Number(creditForm.interest_rate || 2);
+      const pDate = creditForm.date || new Date().toISOString().slice(0, 10);
+      const dueDate = new Date(new Date(pDate).getTime() + creditDays * 86400000).toISOString().slice(0, 10);
+      const billRef = creditForm.notes ? `CR-${creditForm.notes.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8).toUpperCase()}-${Date.now().toString().slice(-4)}` : `CR-${Date.now().toString().slice(-6)}`;
+
+      await api.post("/farmer_credit_ledger", {
+        customer_id: selectedCust.id,
+        farmer_id: selectedCust.id,
+        farmer_name: selectedCust.name,
+        mobile: selectedCust.mobile,
+        village: selectedCust.village,
+        invoice_id: billRef,
+        purchase_date: pDate,
+        due_date: dueDate,
+        credit_amount: amt,
+        principal_amount: amt,
+        outstanding_principal: amt,
+        amount_paid: 0,
+        interest_rate: interestRate,
+        credit_due_days: creditDays,
+        status: "PENDING",
+        notes: creditForm.notes || "Customer credit added",
+        update_customer_balance: true
+      });
+
+      const updatedBal = Math.round((Number(selectedCust.pending_balance || 0) + amt) * 100) / 100;
+      await api.put(`/customers/${selectedCust.id}`, {
+        pending_balance: updatedBal,
+        credit_amount: updatedBal
+      });
+
+      notify(`Credit of ${currency.format(amt)} added for ${selectedCust.name}! Monthly interest starts from ${pDate}.`);
+      setCreditModalOpen(false);
+      setCreditForm({ customer_id: "", amount: "", date: new Date().toISOString().slice(0, 10), credit_days: 30, interest_rate: 2, notes: "" });
+      load();
+    } catch (err) {
+      notify(err.message || "Failed to add customer credit.");
+    }
+  };
+
   const handleRecordPaymentSubmit = async () => {
     if (!payModalCustomer) return;
     const amt = Number(payForm.amount);
@@ -1997,18 +2122,26 @@ function FarmerPayments({ api, notify }) {
             onClick={() => setTab("outstanding")} 
             className={`px-4 py-2 font-bold transition-all ${tab === "outstanding" ? "text-paddy-700 border-b-2 border-paddy-700 bg-paddy-50/50" : "text-slate-500 hover:text-slate-800"}`}
           >
-            Credit Outstanding ({customers.filter(c => getCustomerCreditSummary(c, creditLedger, sales).totalOutstanding > 0).length})
+            Credit Outstanding ({customers.filter(c => Number(c.pending_balance) > 0).length})
           </button>
         </div>
-        <button 
-          onClick={() => {
-            if (customers.length > 0) openPayModal(customers[0]);
-            else notify("Please add a farmer record first.");
-          }} 
-          className="btn bg-paddy-700 text-white font-bold flex items-center gap-2"
-        >
-          <Plus className="h-5 w-5" /> Record Payment
-        </button>
+        <div className="flex gap-2 sm:gap-3 flex-wrap">
+          <button 
+            onClick={() => openAddCreditForCustomer(customers[0])}
+            className="btn bg-amber-600 hover:bg-amber-700 text-white font-bold flex items-center gap-1.5 shadow-sm"
+          >
+            <Plus className="h-5 w-5" /> Add Customer Credit
+          </button>
+          <button 
+            onClick={() => {
+              if (customers.length > 0) openPayModal(customers.find(c => Number(c.pending_balance) > 0) || customers[0]);
+              else notify("Please add a farmer record first.");
+            }} 
+            className="btn bg-paddy-700 text-white font-bold flex items-center gap-2 shadow-sm"
+          >
+            <Plus className="h-5 w-5" /> Record Payment
+          </button>
+        </div>
       </div>
 
       {/* KPI Cards */}
@@ -2104,21 +2237,21 @@ function FarmerPayments({ api, notify }) {
       {/* Tab 2: Credit Outstanding */}
       {tab === "outstanding" && (
         <Panel title="Farmer Outstanding Accounts" actions={<SearchBox value={search} setValue={setSearch} />}>
-          <div className="max-h-[560px] overflow-auto rounded-md border border-slate-200">
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-paddy-50 text-left">
+          <div className="overflow-x-auto rounded-md border border-slate-200 custom-scrollbar">
+            <table className="w-full text-sm min-w-[920px]">
+              <thead className="bg-paddy-50 text-left">
                 <tr>
-                  <th>Farmer Name</th>
-                  <th>Mobile / Village</th>
-                  <th>Credit Limit</th>
-                  <th>Principal Dues</th>
-                  <th>Accrued Interest (from Purchase Date)</th>
-                  <th>Total Outstanding</th>
-                  <th>Status</th>
-                  <th>Actions</th>
+                  <th className="py-3 px-3">Farmer Name</th>
+                  <th className="py-3 px-3">Mobile / Village</th>
+                  <th className="py-3 px-3">Credit Limit</th>
+                  <th className="py-3 px-3">Principal Dues</th>
+                  <th className="py-3 px-3">Accrued Interest (from Purchase Date)</th>
+                  <th className="py-3 px-3">Total Outstanding</th>
+                  <th className="py-3 px-3">Status</th>
+                  <th className="py-3 px-3 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-200">
                 {customers
                   .filter(c => !search || c.name?.toLowerCase().includes(search.toLowerCase()) || c.village?.toLowerCase().includes(search.toLowerCase()) || c.mobile?.includes(search))
                   .map(c => {
@@ -2126,19 +2259,19 @@ function FarmerPayments({ api, notify }) {
                     const isCleared = summary.principal <= 0 && summary.totalOutstanding <= 0;
                     const oldestBill = summary.breakdown.length > 0 ? summary.breakdown[0] : null;
                     return (
-                      <tr key={c.id}>
-                        <td className="font-bold text-slate-800">{c.name}</td>
-                        <td className="text-xs text-slate-600">{c.mobile || "-"} | {c.village || "-"}</td>
-                        <td className="text-xs text-slate-600">{currency.format(c.credit_amount || 20000)}</td>
-                        <td className="font-semibold text-slate-800">
+                      <tr key={c.id} className="hover:bg-slate-50 transition-colors">
+                        <td className="py-3 px-3 font-bold text-slate-800">{c.name}</td>
+                        <td className="py-3 px-3 text-xs text-slate-600">{c.mobile || "-"} | {c.village || "-"}</td>
+                        <td className="py-3 px-3 text-xs text-slate-600">{currency.format(c.credit_amount || 20000)}</td>
+                        <td className="py-3 px-3 font-semibold text-slate-800">
                           {currency.format(summary.principal)}
                         </td>
-                        <td>
+                        <td className="py-3 px-3">
                           {summary.accruedInterest > 0 ? (
                             <div className="flex flex-col">
                               <span className="font-bold text-amber-700">+{currency.format(summary.accruedInterest)}</span>
                               {oldestBill && (
-                                <span className="text-[10px] text-slate-500 font-medium">
+                                <span className="text-[11px] text-slate-500 font-medium">
                                   {oldestBill.daysElapsed}d @ {oldestBill.rate}%/mo (from {oldestBill.purchase_date})
                                 </span>
                               )}
@@ -2147,19 +2280,19 @@ function FarmerPayments({ api, notify }) {
                             <span className="text-xs text-slate-400">₹0.00</span>
                           )}
                         </td>
-                        <td className={`font-black text-base ${isCleared ? "text-emerald-600" : "text-red-600"}`}>
+                        <td className={`py-3 px-3 font-black text-base ${isCleared ? "text-emerald-600" : "text-red-600"}`}>
                           {currency.format(summary.totalOutstanding)}
                         </td>
-                        <td>
+                        <td className="py-3 px-3">
                           <span className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
                             isCleared ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"
                           }`}>
                             {isCleared ? "✓ CLEARED" : "Outstanding Dues"}
                           </span>
                         </td>
-                        <td>
-                          <div className="flex gap-2 items-center flex-wrap">
-                            {!isCleared && (
+                        <td className="py-3 px-3 text-right">
+                          <div className="flex gap-2 items-center justify-end flex-wrap">
+                            {!isCleared ? (
                               <>
                                 <button 
                                   onClick={() => openPayModal(c, summary)} 
@@ -2175,6 +2308,13 @@ function FarmerPayments({ api, notify }) {
                                   <Bell className="h-3 w-3" /> Remind
                                 </button>
                               </>
+                            ) : (
+                              <button 
+                                onClick={() => openAddCreditForCustomer(c)} 
+                                className="btn-secondary text-xs py-1 px-2.5 bg-amber-600 text-white font-bold hover:bg-amber-700 shadow-sm"
+                              >
+                                + Give Credit
+                              </button>
                             )}
                             <button className="link text-xs font-bold" onClick={() => setLedgerCustomer({ ...c, creditSummary: summary })}>
                               View Ledger
@@ -2190,16 +2330,141 @@ function FarmerPayments({ api, notify }) {
         </Panel>
       )}
 
+      {/* Add Customer Credit Modal */}
+      {creditModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-9 w-9 rounded-full bg-amber-100 flex items-center justify-center text-amber-800">
+                  <Plus className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-800">Add Customer Credit (Udhaari)</h2>
+                  <p className="text-xs text-slate-500">Record unpaid product balance or farmer credit</p>
+                </div>
+              </div>
+              <button onClick={() => setCreditModalOpen(false)} className="p-1 hover:bg-slate-100 rounded-full">
+                <X className="h-5 w-5 text-slate-500" />
+              </button>
+            </div>
+
+            <div className="space-y-3 overflow-y-auto pr-1">
+              <Select
+                label="Select Farmer / Customer"
+                value={creditForm.customer_id}
+                options={["", ...customers.map(c => c.id)]}
+                labels={{ "": "-- Select Farmer --", ...Object.fromEntries(customers.map(c => [
+                  c.id, 
+                  `${c.name} (${c.mobile || "No mob"}${c.village ? " - " + c.village : ""}) - Balance: ₹${Number(c.pending_balance || 0).toFixed(2)}`
+                ]))}}
+                onChange={(customer_id) => setCreditForm({ ...creditForm, customer_id })}
+              />
+
+              <div className="grid grid-cols-2 gap-3">
+                <Input 
+                  label="Credit Amount (₹)" 
+                  type="number" 
+                  value={creditForm.amount} 
+                  onChange={amount => setCreditForm({ ...creditForm, amount })} 
+                />
+                <Input 
+                  label="Credit / Purchase Date" 
+                  type="date" 
+                  value={creditForm.date} 
+                  onChange={date => setCreditForm({ ...creditForm, date })} 
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Input 
+                  label="Credit Due Days" 
+                  type="number" 
+                  value={creditForm.credit_days} 
+                  onChange={credit_days => setCreditForm({ ...creditForm, credit_days })} 
+                />
+                <Input 
+                  label="Monthly Interest Rate %" 
+                  type="number" 
+                  value={creditForm.interest_rate} 
+                  onChange={interest_rate => setCreditForm({ ...creditForm, interest_rate })} 
+                />
+              </div>
+
+              <Input 
+                label="Reference Bill / Purpose" 
+                placeholder="e.g. Fertilizer purchase balance, Seeds credit, Monsoon Udhaari" 
+                value={creditForm.notes} 
+                onChange={notes => setCreditForm({ ...creditForm, notes })} 
+              />
+
+              {/* Dynamic Calculation Preview */}
+              {Number(creditForm.amount) > 0 && (
+                <div className="bg-amber-50 border border-amber-300 rounded-lg p-3.5 text-xs text-amber-950 space-y-1.5 shadow-sm">
+                  <div className="flex justify-between font-bold">
+                    <span>Credit Principal:</span>
+                    <span>{currency.format(Number(creditForm.amount))}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-700">
+                    <span>Monthly Interest Rate:</span>
+                    <span>{creditForm.interest_rate || 2}% per month</span>
+                  </div>
+                  <div className="flex justify-between text-slate-700">
+                    <span>Monthly Interest Accrual:</span>
+                    <span className="font-bold text-amber-800">+{currency.format(Number(creditForm.amount) * Number(creditForm.interest_rate || 2) / 100)} / month</span>
+                  </div>
+                  <div className="pt-1.5 border-t border-amber-200 text-amber-900">
+                    Interest starts calculating from purchase date <strong>{creditForm.date}</strong> and accumulates month by month until paid.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3 pt-3 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={handleAddCreditSubmit}
+                disabled={!creditForm.customer_id || Number(creditForm.amount) <= 0}
+                className="btn flex-1 py-3 text-base bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white font-bold"
+              >
+                Save & Add Credit
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreditModalOpen(false)}
+                className="btn-secondary flex-1 py-3"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Record Payment Modal */}
       {payModalCustomer && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6 space-y-4">
             <div className="flex justify-between items-center border-b border-slate-200 pb-3">
-              <h2 className="text-xl font-bold text-slate-800">Pay Outstanding: {payModalCustomer.name}</h2>
+              <h2 className="text-xl font-bold text-slate-800">Record Farmer Payment</h2>
               <button onClick={() => setPayModalCustomer(null)} className="p-1 hover:bg-slate-100 rounded-full">
                 <X className="h-5 w-5 text-slate-500" />
               </button>
             </div>
+
+            <Select
+              label="Select Farmer Account"
+              value={payModalCustomer.id}
+              options={customers.map(c => c.id)}
+              labels={Object.fromEntries(customers.map(c => [
+                c.id, 
+                `${c.name} (${c.mobile || "No mob"}${c.village ? " - " + c.village : ""}) - Balance: ₹${Number(c.pending_balance || 0).toFixed(2)}`
+              ]))}
+              onChange={(cid) => {
+                const selected = customers.find(c => c.id === cid);
+                if (selected) openPayModal(selected);
+              }}
+            />
 
             <div className="space-y-2 bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm">
               <Row label="Principal Outstanding" value={currency.format(payModalCustomer.pendingPrincipal ?? payModalCustomer.pending_balance)} />
