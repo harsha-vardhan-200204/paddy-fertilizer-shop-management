@@ -27,6 +27,10 @@ import {
   ShieldAlert,
   Edit2,
   Trash2,
+  Bell,
+  Send,
+  Copy,
+  Check,
   X
 } from "lucide-react";
 import {
@@ -788,10 +792,10 @@ function Billing({ api, notify }) {
       finalPaymentMethod = `Card (Txn: TXNCARD${Date.now()})`;
       finalAmountPaid = grand;
     } else if (form.payment_method === "Credit") {
-      finalPaymentMethod = `Credit (${form.credit_days} Days @ ${form.interest_rate}%)`;
+      finalPaymentMethod = `Credit (${form.credit_days || 30} Days @ ${form.interest_rate || 2}%)`;
       finalAmountPaid = 0;
     } else if (form.payment_method === "Mixed") {
-      finalPaymentMethod = "MIXED";
+      finalPaymentMethod = `MIXED (Credit: ₹${Number(mixedAmounts.Credit||0)} @ ${form.interest_rate || 2}%)`;
       finalAmountPaid = Number(mixedAmounts.Cash||0) + Number(mixedAmounts.UPI||0) + Number(mixedAmounts.Card||0);
     } else {
       finalPaymentMethod = "Cash";
@@ -799,6 +803,8 @@ function Billing({ api, notify }) {
 
     const payload = { 
       ...form,
+      credit_days: Number(form.credit_days || 30),
+      interest_rate: Number(form.interest_rate || 2),
       customer_aadhaar: form.customer_aadhaar ? form.customer_aadhaar.replace(/\D/g, "") : "", 
       payment_method: finalPaymentMethod,
       amount_paid: finalAmountPaid,
@@ -815,25 +821,43 @@ function Billing({ api, notify }) {
         if (Number(amount) > 0 && method !== "Credit") {
            await api.post("/farmer_payments", {
              farmer_id: form.customer_id,
+             customer_id: form.customer_id,
              farmer_name: form.customer_name,
              invoice_id: saved.invoice_number,
-             payment_date: new Date().toISOString().slice(0, 10),
+             payment_date: saved.date || new Date().toISOString().slice(0, 10),
              total_invoice_amount: grand,
-             amount_paid: amount,
+             amount_paid: Number(amount),
+             amount: Number(amount),
              payment_method: method.toUpperCase(),
              payment_status: "PAID"
            });
-        } else if (Number(amount) > 0 && method === "Credit") {
-           await api.post("/farmer_credit_ledger", {
-             customer_id: form.customer_id,
-             credit_amount: amount
-           });
-           const cust = customers.find(c => c.id === form.customer_id);
-           if (cust) {
-             const newBal = Number(cust.pending_balance || 0) + Number(amount);
-             await api.put(`/customers/${cust.id}`, { pending_balance: newBal });
-           }
         }
+      }
+    }
+
+    // Record credit in farmer_credit_ledger for Pure Credit and Mixed modes
+    const creditPortion = form.payment_method === "Credit" ? grand : (form.payment_method === "Mixed" ? Number(mixedAmounts.Credit || 0) : 0);
+    if (creditPortion > 0 && form.customer_id) {
+      try {
+        await api.post("/farmer_credit_ledger", {
+          customer_id: form.customer_id,
+          farmer_id: form.customer_id,
+          farmer_name: form.customer_name,
+          mobile: form.mobile,
+          village: form.village,
+          invoice_id: saved.invoice_number,
+          sale_id: saved.id,
+          purchase_date: saved.date || new Date().toISOString().slice(0, 10),
+          due_date: new Date(Date.now() + Number(form.credit_days || 30) * 86400000).toISOString().slice(0, 10),
+          credit_amount: creditPortion,
+          principal_amount: creditPortion,
+          outstanding_principal: creditPortion,
+          interest_rate: Number(form.interest_rate || 2),
+          credit_due_days: Number(form.credit_days || 30),
+          status: "PENDING"
+        });
+      } catch (err) {
+        console.warn("Credit ledger write fallback:", err);
       }
     }
 
@@ -911,6 +935,21 @@ function Billing({ api, notify }) {
                   <span>Total Allocated: ₹{Number(mixedAmounts.Cash||0) + Number(mixedAmounts.UPI||0) + Number(mixedAmounts.Card||0) + Number(mixedAmounts.Credit||0)}</span>
                   <span>Remaining: ₹{grand - (Number(mixedAmounts.Cash||0) + Number(mixedAmounts.UPI||0) + Number(mixedAmounts.Card||0) + Number(mixedAmounts.Credit||0))}</span>
                 </div>
+                {Number(mixedAmounts.Credit || 0) > 0 && (
+                  <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-lg space-y-3 shadow-sm">
+                    <div className="flex items-center gap-2 text-xs font-bold text-amber-900">
+                      <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                      <span>Credit Portion Terms (₹{Number(mixedAmounts.Credit).toFixed(2)})</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Input label="Credit Due Days" type="number" value={form.credit_days} onChange={v => setForm({...form, credit_days: v})} />
+                      <Input label="Interest Rate % (monthly)" type="number" value={form.interest_rate} onChange={v => setForm({...form, interest_rate: v})} />
+                    </div>
+                    <p className="text-xs text-amber-900 leading-relaxed">
+                      Udhaari of <strong>₹{Number(mixedAmounts.Credit).toFixed(2)}</strong> will be booked. Interest @ <strong>{form.interest_rate || 2}%/month</strong> starts accruing from purchase date (<strong>{new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</strong>).
+                    </p>
+                  </div>
+                )}
                 <button onClick={saveInvoice} className="btn w-full text-base py-3 mt-4">Complete Mixed Payment & Receipt</button>
               </div>
             )}
@@ -1028,18 +1067,23 @@ function Billing({ api, notify }) {
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <Input label="Credit Due Days" type="number" value={form.credit_days} onChange={v => setForm({...form, credit_days: v})} />
-                  <Input label="Interest Rate %" type="number" value={form.interest_rate} onChange={v => setForm({...form, interest_rate: v})} />
+                  <Input label="Interest Rate % (monthly)" type="number" value={form.interest_rate} onChange={v => setForm({...form, interest_rate: v})} />
                 </div>
-                <div className="bg-amber-100 p-3 border border-amber-200 rounded text-sm text-amber-900 flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <div className="bg-amber-50 p-3.5 border border-amber-300 rounded-lg text-sm text-amber-950 space-y-2 shadow-sm">
+                  <div className="flex items-center gap-2 font-bold text-amber-900">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
+                    <span>Credit Billing Terms & Accrual</span>
+                  </div>
+                  <p className="text-xs text-amber-900 leading-relaxed">
+                    Credit amount: <strong>₹{grand.toFixed(2)}</strong>. Simple interest @ <strong>{form.interest_rate || 2}% per month</strong> will accrue from purchase date (<strong>{new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</strong>).
+                  </p>
                   {(() => {
                     const sel = customers.find(c => c.id === form.customer_id);
                     const pending = Number(sel?.pending_balance || 0);
                     if (pending > 0) {
-                      const interest = pending * Number(form.interest_rate || 2) / 100;
-                      return <p>⚠ Farmer has an existing outstanding balance of ₹{pending.toFixed(2)}. Monthly interest: ₹{interest.toFixed(2)}. Total payable after next interest cycle: ₹{(pending + interest).toFixed(2)}.</p>;
+                      return <p className="text-xs text-red-700 font-semibold pt-1 border-t border-amber-200">⚠ Farmer has existing balance of ₹{pending.toFixed(2)}. Total principal dues will become ₹{(pending + grand).toFixed(2)}.</p>;
                     }
-                    return <p>Farmer's pending balance will increase by <strong>₹{grand.toFixed(2)}</strong>. Ensure farmer record exists.</p>;
+                    return <p className="text-xs text-slate-600">Farmer record: <strong>{form.customer_name || "Walk-in Farmer"}</strong></p>;
                   })()}
                 </div>
                 <button onClick={saveInvoice} className="btn w-full text-base py-3 mt-4 bg-amber-600 hover:bg-amber-700 text-white">Approve Credit Billing</button>
@@ -1681,10 +1725,139 @@ function CrudPage({ api, resource, title, blank, columns, notify }) {
 }
 
 
+function getCustomerCreditSummary(customer, creditLedger = [], sales = []) {
+  if (!customer) return { principal: 0, accruedInterest: 0, totalOutstanding: 0, breakdown: [] };
+  const custId = customer.id;
+  const custName = (customer.name || "").trim().toLowerCase();
+  
+  // 1. Gather all credit ledger entries matching customer_id, farmer_id, or farmer_name
+  let entries = (creditLedger || []).filter(l => 
+    (l.customer_id && l.customer_id === custId) || 
+    (l.farmer_id && l.farmer_id === custId) || 
+    (l.farmer_name && custName && l.farmer_name.trim().toLowerCase() === custName)
+  );
+
+  // 2. Fallback to sales with balance_due > 0 if not present in ledger
+  if (!entries.length && (sales || []).length) {
+    const creditSales = sales.filter(s => 
+      ((s.customer_id && s.customer_id === custId) || (s.customer_name && custName && s.customer_name.trim().toLowerCase() === custName)) &&
+      Number(s.balance_due || 0) > 0
+    );
+    entries = creditSales.map(s => {
+      const match = String(s.payment_method || "").match(/@\s*([0-9.]+)%/);
+      const rate = match ? Number(match[1]) : 2;
+      const daysMatch = String(s.payment_method || "").match(/([0-9]+)\s*Days/i);
+      const dueDays = daysMatch ? Number(daysMatch[1]) : 30;
+      return {
+        id: s.id,
+        invoice_id: s.invoice_number,
+        purchase_date: s.date || (s.created_at ? s.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10)),
+        credit_amount: Number(s.balance_due),
+        principal_amount: Number(s.balance_due),
+        outstanding_principal: Number(s.balance_due),
+        interest_rate: rate,
+        credit_due_days: dueDays,
+        status: "PENDING"
+      };
+    });
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  let totalPrincipal = 0;
+  let totalInterest = 0;
+  const breakdown = [];
+
+  for (const entry of entries) {
+    const principal = Number(entry.outstanding_principal ?? entry.principal_amount ?? entry.credit_amount ?? 0);
+    if (principal <= 0 && entry.status === "CLEARED") continue;
+    
+    const rate = Number(entry.interest_rate || 2);
+    const pDateStr = entry.purchase_date || entry.credit_date || (entry.created_at ? entry.created_at.slice(0, 10) : "");
+    const pDate = pDateStr ? new Date(pDateStr) : new Date();
+    pDate.setHours(0, 0, 0, 0);
+
+    const diffMs = Math.max(0, today.getTime() - pDate.getTime());
+    const daysElapsed = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+    
+    // Simple Interest from purchase date: Principal * (Rate% / 100) * (daysElapsed / 30)
+    const accruedInterest = principal > 0 ? Math.round(principal * (rate / 100) * (daysElapsed / 30) * 100) / 100 : 0;
+    
+    totalPrincipal += principal;
+    totalInterest += accruedInterest;
+
+    breakdown.push({
+      ...entry,
+      invoice_id: entry.invoice_id || "CREDIT-BILL",
+      purchase_date: pDateStr || new Date().toISOString().slice(0, 10),
+      daysElapsed,
+      rate,
+      principal,
+      accruedInterest,
+      totalDue: Math.round((principal + accruedInterest) * 100) / 100
+    });
+  }
+
+  const profilePending = Number(customer.pending_balance || 0);
+  if (profilePending > totalPrincipal && totalPrincipal === 0) {
+    totalPrincipal = profilePending;
+    totalInterest = Math.round(profilePending * 0.02 * 100) / 100;
+  } else if (totalPrincipal === 0 && profilePending > 0) {
+    totalPrincipal = profilePending;
+  }
+
+  return {
+    principal: Math.round(totalPrincipal * 100) / 100,
+    accruedInterest: Math.round(totalInterest * 100) / 100,
+    totalOutstanding: Math.round((totalPrincipal + totalInterest) * 100) / 100,
+    breakdown
+  };
+}
+
+function generateReminderText(customer, summary) {
+  const shopName = "SRI ANJANEYA AGRO AGENCIES";
+  const upiId = "harshavardhanjunji-2@okhdfcbank";
+  const phone = "9900389992";
+  
+  let billLines = "";
+  if (summary.breakdown && summary.breakdown.length > 0) {
+    billLines = summary.breakdown.map(b => 
+      `• Bill ${b.invoice_id}: ₹${b.principal.toFixed(2)} on ${b.purchase_date} (${b.daysElapsed} days ago, Interest: ₹${b.accruedInterest.toFixed(2)})`
+    ).join("\n");
+  } else {
+    billLines = `• Outstanding Credit Balance: ₹${summary.principal.toFixed(2)}`;
+  }
+
+  const payLink = `upi://pay?pa=${upiId}&pn=Sri%20Anjaneya%20Agro&am=${summary.totalOutstanding.toFixed(2)}&cu=INR`;
+
+  return `🌾 *${shopName}* 🌾
+Shri Shiva nilaya, Hale kunduvada, Davanagere - 577566
+Phone: ${phone}
+
+Namaskara ${customer.name} avare,
+This is a gentle payment reminder regarding your agro inputs credit (Udhaari) dues:
+
+📋 *Bill Breakdown & Accrued Interest:*
+${billLines}
+
+💰 *Principal Credit:* ₹${summary.principal.toFixed(2)}
+📈 *Accrued Interest (from Purchase Date):* ₹${summary.accruedInterest.toFixed(2)}
+👉 *Total Amount Due:* ₹${summary.totalOutstanding.toFixed(2)}
+
+💳 *Pay Online via UPI:*
+UPI ID: *${upiId}*
+UPI Pay Link: ${payLink}
+
+Kindly clear the balance at your earliest convenience or visit the shop counter.
+Thank you for your continued farming partnership!`;
+}
+
 function FarmerPayments({ api, notify }) {
   const [payments, setPayments] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [sales, setSales] = useState([]);
+  const [creditLedger, setCreditLedger] = useState([]);
   const [search, setSearch] = useState("");
   const [methodFilter, setMethodFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -1692,6 +1865,8 @@ function FarmerPayments({ api, notify }) {
   const [tab, setTab] = useState("records"); 
   const [payModalCustomer, setPayModalCustomer] = useState(null);
   const [ledgerCustomer, setLedgerCustomer] = useState(null);
+  const [reminderCustomer, setReminderCustomer] = useState(null);
+  const [reminderCopied, setReminderCopied] = useState(false);
   const [payForm, setPayForm] = useState({
     amount: "",
     method: "CASH",
@@ -1703,6 +1878,7 @@ function FarmerPayments({ api, notify }) {
     api.get("/payments").then(setPayments);
     api.get("/customers").then(setCustomers);
     api.get("/sales").then(setSales);
+    api.get("/farmer_credit_ledger").then(setCreditLedger).catch(() => setCreditLedger([]));
   };
   useEffect(() => void load(), []);
 
@@ -1727,36 +1903,61 @@ function FarmerPayments({ api, notify }) {
   const upiCollected = payments.filter(p => (p.payment_method || "").toUpperCase() === "UPI").reduce((sum, p) => sum + Number(p.amount_paid || p.amount || 0), 0);
   const cardCollected = payments.filter(p => (p.payment_method || "").toUpperCase() === "CARD").reduce((sum, p) => sum + Number(p.amount_paid || p.amount || 0), 0);
   const cashCollected = payments.filter(p => (p.payment_method || "").toUpperCase() === "CASH").reduce((sum, p) => sum + Number(p.amount_paid || p.amount || 0), 0);
-  const creditTotal = customers.reduce((sum, c) => sum + Number(c.pending_balance || 0), 0);
 
-  const openPayModal = (customer) => {
-    const pending = Number(customer.pending_balance || 0);
-    const estInterest = Math.round(pending * 0.02 * 100) / 100;
+  const creditStats = useMemo(() => {
+    let principal = 0;
+    let interest = 0;
+    for (const c of customers) {
+      const s = getCustomerCreditSummary(c, creditLedger, sales);
+      principal += s.principal;
+      interest += s.accruedInterest;
+    }
+    return {
+      principal: Math.round(principal * 100) / 100,
+      interest: Math.round(interest * 100) / 100,
+      total: Math.round((principal + interest) * 100) / 100
+    };
+  }, [customers, creditLedger, sales]);
+
+  const openPayModal = (customer, customSummary) => {
+    const summary = customSummary || getCustomerCreditSummary(customer, creditLedger, sales);
     setPayModalCustomer({
       ...customer,
-      pendingPrincipal: pending,
-      estInterest: estInterest,
-      totalOutstanding: Math.round((pending + estInterest) * 100) / 100
+      pendingPrincipal: summary.principal,
+      estInterest: summary.accruedInterest,
+      totalOutstanding: summary.totalOutstanding,
+      breakdown: summary.breakdown
     });
     setPayForm({
-      amount: pending > 0 ? String(pending) : "0",
+      amount: summary.totalOutstanding > 0 ? String(summary.totalOutstanding) : (summary.principal > 0 ? String(summary.principal) : "0"),
       method: "CASH",
       date: new Date().toISOString().slice(0, 10),
-      notes: ""
+      notes: `Settlement of credit dues (Principal: ₹${summary.principal}, Accrued Interest: ₹${summary.accruedInterest})`
     });
+  };
+
+  const openReminderModal = (customer, customSummary) => {
+    const summary = customSummary || getCustomerCreditSummary(customer, creditLedger, sales);
+    const msg = generateReminderText(customer, summary);
+    setReminderCustomer({
+      ...customer,
+      summary,
+      message: msg
+    });
+    setReminderCopied(false);
   };
 
   const handleRecordPaymentSubmit = async () => {
     if (!payModalCustomer) return;
     const amt = Number(payForm.amount);
-    const maxAllowed = Number(payModalCustomer.pending_balance || payModalCustomer.totalOutstanding || 0);
+    const maxAllowed = Number(payModalCustomer.totalOutstanding || payModalCustomer.pending_balance || 0);
 
     if (isNaN(amt) || amt <= 0) {
       notify("Please enter a valid payment amount greater than zero.");
       return;
     }
     if (maxAllowed > 0 && amt > maxAllowed + 0.01) {
-      notify("Payment amount cannot exceed the current outstanding balance.");
+      notify("Payment amount cannot exceed the total outstanding dues.");
       return;
     }
 
@@ -1764,12 +1965,14 @@ function FarmerPayments({ api, notify }) {
       await api.post("/payments", {
         customer_id: payModalCustomer.id,
         customer_name: payModalCustomer.name,
+        farmer_id: payModalCustomer.id,
+        farmer_name: payModalCustomer.name,
         amount: amt,
         amount_paid: amt,
         payment_method: payForm.method,
         payment_date: payForm.date,
         notes: payForm.notes,
-        previous_outstanding: payModalCustomer.pending_balance
+        previous_outstanding: payModalCustomer.totalOutstanding || payModalCustomer.pending_balance
       });
       notify(`Payment of ${currency.format(amt)} recorded successfully!`);
       setPayModalCustomer(null);
@@ -1794,7 +1997,7 @@ function FarmerPayments({ api, notify }) {
             onClick={() => setTab("outstanding")} 
             className={`px-4 py-2 font-bold transition-all ${tab === "outstanding" ? "text-paddy-700 border-b-2 border-paddy-700 bg-paddy-50/50" : "text-slate-500 hover:text-slate-800"}`}
           >
-            Credit Outstanding ({customers.filter(c => Number(c.pending_balance) > 0).length})
+            Credit Outstanding ({customers.filter(c => getCustomerCreditSummary(c, creditLedger, sales).totalOutstanding > 0).length})
           </button>
         </div>
         <button 
@@ -1809,12 +2012,13 @@ function FarmerPayments({ api, notify }) {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
         <Mini label="Total Collected" value={currency.format(totalCollected)} />
         <Mini label="UPI Payments" value={currency.format(upiCollected)} />
         <Mini label="Card Payments" value={currency.format(cardCollected)} />
         <Mini label="Cash Payments" value={currency.format(cashCollected)} />
-        <Mini label="Credit Pending" value={currency.format(creditTotal)} />
+        <Mini label="Principal Pending" value={currency.format(creditStats.principal)} />
+        <Mini label="Accrued Interest" value={currency.format(creditStats.interest)} />
       </div>
 
       {/* Tab 1: Payment History Ledger */}
@@ -1907,24 +2111,44 @@ function FarmerPayments({ api, notify }) {
                   <th>Farmer Name</th>
                   <th>Mobile / Village</th>
                   <th>Credit Limit</th>
-                  <th>Current Outstanding</th>
+                  <th>Principal Dues</th>
+                  <th>Accrued Interest (from Purchase Date)</th>
+                  <th>Total Outstanding</th>
                   <th>Status</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {customers
-                  .filter(c => !search || c.name?.toLowerCase().includes(search.toLowerCase()) || c.village?.toLowerCase().includes(search.toLowerCase()))
+                  .filter(c => !search || c.name?.toLowerCase().includes(search.toLowerCase()) || c.village?.toLowerCase().includes(search.toLowerCase()) || c.mobile?.includes(search))
                   .map(c => {
-                    const pending = Number(c.pending_balance || 0);
-                    const isCleared = pending <= 0;
+                    const summary = getCustomerCreditSummary(c, creditLedger, sales);
+                    const isCleared = summary.principal <= 0 && summary.totalOutstanding <= 0;
+                    const oldestBill = summary.breakdown.length > 0 ? summary.breakdown[0] : null;
                     return (
                       <tr key={c.id}>
                         <td className="font-bold text-slate-800">{c.name}</td>
                         <td className="text-xs text-slate-600">{c.mobile || "-"} | {c.village || "-"}</td>
                         <td className="text-xs text-slate-600">{currency.format(c.credit_amount || 20000)}</td>
-                        <td className={`font-bold text-base ${isCleared ? "text-emerald-600" : "text-red-600"}`}>
-                          {currency.format(pending)}
+                        <td className="font-semibold text-slate-800">
+                          {currency.format(summary.principal)}
+                        </td>
+                        <td>
+                          {summary.accruedInterest > 0 ? (
+                            <div className="flex flex-col">
+                              <span className="font-bold text-amber-700">+{currency.format(summary.accruedInterest)}</span>
+                              {oldestBill && (
+                                <span className="text-[10px] text-slate-500 font-medium">
+                                  {oldestBill.daysElapsed}d @ {oldestBill.rate}%/mo (from {oldestBill.purchase_date})
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-slate-400">₹0.00</span>
+                          )}
+                        </td>
+                        <td className={`font-black text-base ${isCleared ? "text-emerald-600" : "text-red-600"}`}>
+                          {currency.format(summary.totalOutstanding)}
                         </td>
                         <td>
                           <span className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
@@ -1934,16 +2158,25 @@ function FarmerPayments({ api, notify }) {
                           </span>
                         </td>
                         <td>
-                          <div className="flex gap-3 items-center">
+                          <div className="flex gap-2 items-center flex-wrap">
                             {!isCleared && (
-                              <button 
-                                onClick={() => openPayModal(c)} 
-                                className="btn-secondary text-xs py-1 px-3 bg-paddy-700 text-white font-bold hover:bg-paddy-800"
-                              >
-                                + Pay Outstanding
-                              </button>
+                              <>
+                                <button 
+                                  onClick={() => openPayModal(c, summary)} 
+                                  className="btn-secondary text-xs py-1 px-2.5 bg-paddy-700 text-white font-bold hover:bg-paddy-800 shadow-sm"
+                                >
+                                  + Pay Dues
+                                </button>
+                                <button 
+                                  onClick={() => openReminderModal(c, summary)} 
+                                  className="btn-secondary text-xs py-1 px-2.5 bg-emerald-700 text-white font-bold hover:bg-emerald-800 flex items-center gap-1 shadow-sm"
+                                  title="Send payment reminder on WhatsApp"
+                                >
+                                  <Bell className="h-3 w-3" /> Remind
+                                </button>
+                              </>
                             )}
-                            <button className="link text-xs font-bold" onClick={() => setLedgerCustomer(c)}>
+                            <button className="link text-xs font-bold" onClick={() => setLedgerCustomer({ ...c, creditSummary: summary })}>
                               View Ledger
                             </button>
                           </div>
@@ -1968,10 +2201,27 @@ function FarmerPayments({ api, notify }) {
               </button>
             </div>
 
-            <div className="space-y-2 bg-slate-50 p-4 rounded-lg border border-slate-200">
-              <Row label="Original Outstanding" value={currency.format(payModalCustomer.pendingPrincipal || payModalCustomer.pending_balance)} />
-              <Row label="Accrued Interest (Est)" value={currency.format(payModalCustomer.estInterest || 0)} />
-              <Row label="Total Outstanding" value={currency.format(payModalCustomer.totalOutstanding || payModalCustomer.pending_balance)} strong />
+            <div className="space-y-2 bg-slate-50 p-4 rounded-lg border border-slate-200 text-sm">
+              <Row label="Principal Outstanding" value={currency.format(payModalCustomer.pendingPrincipal ?? payModalCustomer.pending_balance)} />
+              <Row label="Accrued Interest (from Purchase Date)" value={`+ ${currency.format(payModalCustomer.estInterest || 0)}`} />
+              <Row label="Total Outstanding Payable" value={currency.format(payModalCustomer.totalOutstanding ?? payModalCustomer.pending_balance)} strong />
+            </div>
+
+            <div className="flex gap-2">
+              <button 
+                type="button" 
+                onClick={() => setPayForm({ ...payForm, amount: String(payModalCustomer.totalOutstanding) })}
+                className="text-xs font-semibold px-2.5 py-1 bg-emerald-50 text-emerald-800 rounded border border-emerald-200 hover:bg-emerald-100"
+              >
+                Full Total (₹{Number(payModalCustomer.totalOutstanding).toFixed(2)})
+              </button>
+              <button 
+                type="button" 
+                onClick={() => setPayForm({ ...payForm, amount: String(payModalCustomer.pendingPrincipal) })}
+                className="text-xs font-semibold px-2.5 py-1 bg-slate-100 text-slate-800 rounded border border-slate-300 hover:bg-slate-200"
+              >
+                Principal Only (₹{Number(payModalCustomer.pendingPrincipal).toFixed(2)})
+              </button>
             </div>
 
             <div className="space-y-3">
@@ -1995,31 +2245,30 @@ function FarmerPayments({ api, notify }) {
               />
               <Input 
                 label="Payment Notes (Optional)" 
-                placeholder="e.g. Partial cash payment against monsoon fertilizer dues" 
+                placeholder="e.g. Partial cash payment against fertilizer dues" 
                 value={payForm.notes} 
                 onChange={v => setPayForm({ ...payForm, notes: v })} 
               />
             </div>
 
-            {/* Dynamic Calculation Breakdown Box */}
             {(() => {
               const amt = Number(payForm.amount || 0);
-              const prev = Number(payModalCustomer.pending_balance || 0);
-              const remaining = Math.max(0, Math.round((prev - amt) * 100) / 100);
-              const isOverpaid = amt > prev;
+              const totalDue = Number(payModalCustomer.totalOutstanding || payModalCustomer.pending_balance || 0);
+              const remaining = Math.max(0, Math.round((totalDue - amt) * 100) / 100);
+              const isOverpaid = amt > totalDue;
 
               return (
                 <div className="space-y-2 pt-3 border-t border-slate-200">
                   <div className="bg-slate-100 p-3 rounded text-xs space-y-1">
-                    <Row label="Previous Outstanding" value={currency.format(prev)} />
-                    <Row label="Payment" value={`- ${currency.format(amt)}`} />
-                    <Row label="Remaining Outstanding" value={currency.format(remaining)} strong />
+                    <Row label="Total Outstanding Due" value={currency.format(totalDue)} />
+                    <Row label="Payment Being Recorded" value={`- ${currency.format(amt)}`} />
+                    <Row label="Remaining Dues After Payment" value={currency.format(remaining)} strong />
                   </div>
 
                   {isOverpaid && (
                     <div className="p-3 bg-red-50 border border-red-200 rounded text-xs text-red-700 font-bold flex items-center gap-2">
                       <AlertTriangle className="h-4 w-4 shrink-0 text-red-600" />
-                      Payment amount cannot exceed the current outstanding balance.
+                      Payment amount cannot exceed total outstanding dues.
                     </div>
                   )}
 
@@ -2042,97 +2291,240 @@ function FarmerPayments({ api, notify }) {
         </div>
       )}
 
-      {/* Customer Detailed Payment Ledger Modal */}
-      {ledgerCustomer && (
+      {/* Customer Payment Reminder Modal */}
+      {reminderCustomer && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl flex flex-col max-h-[90vh]">
-            <div className="p-5 border-b border-slate-200 flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold text-slate-900">Farmer Ledger: {ledgerCustomer.name}</h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Mobile: {ledgerCustomer.mobile || "-"} | Village: {ledgerCustomer.village || "-"} | 
-                  Aadhaar: {ledgerCustomer.aadhaar ? `XXXX XXXX ${ledgerCustomer.aadhaar.replace(/\D/g,"").slice(-4)}` : "Not provided"}
-                </p>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-9 w-9 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-800">
+                  <Bell className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-800">Customer Payment Reminder</h2>
+                  <p className="text-xs text-slate-500">Sri Anjaneya Agro Agencies Counter Notice</p>
+                </div>
               </div>
-              <button onClick={() => setLedgerCustomer(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+              <button onClick={() => setReminderCustomer(null)} className="p-1 hover:bg-slate-100 rounded-full">
                 <X className="h-5 w-5 text-slate-500" />
               </button>
             </div>
 
-            <div className="p-5 overflow-y-auto space-y-6">
-              {/* Ledger Summary Cards */}
-              <div className="grid grid-cols-4 gap-3 bg-slate-50 p-4 rounded-lg border border-slate-200">
-                <Mini label="Total Dues Created" value={currency.format(ledgerCustomer.credit_amount || ledgerCustomer.pending_balance)} />
-                <Mini 
-                  label="Total Paid To Date" 
-                  value={currency.format(
-                    payments
-                      .filter(p => p.customer_id === ledgerCustomer.id || p.customer_name === ledgerCustomer.name)
-                      .reduce((sum, p) => sum + Number(p.amount_paid || p.amount || 0), 0)
-                  )} 
-                />
-                <Mini label="Current Outstanding" value={currency.format(ledgerCustomer.pending_balance || 0)} />
-                <div className="rounded-md bg-paddy-50 p-4 flex flex-col justify-center items-center text-center">
-                  <span className="text-xs text-slate-500 font-medium">Account Status</span>
-                  <span className={`mt-1 text-xs px-3 py-1 rounded-full font-bold ${
-                    Number(ledgerCustomer.pending_balance || 0) <= 0 ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"
-                  }`}>
-                    {Number(ledgerCustomer.pending_balance || 0) <= 0 ? "✓ CLEARED" : "PENDING DUES"}
-                  </span>
+            <div className="space-y-3 overflow-y-auto pr-1">
+              {/* Customer & Dues Summary */}
+              <div className="bg-emerald-50/70 border border-emerald-200 rounded-lg p-4 space-y-2">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider">Farmer Account</p>
+                    <h3 className="text-base font-bold text-slate-900">{reminderCustomer.name}</h3>
+                    <p className="text-xs text-slate-600">📱 {reminderCustomer.mobile || "No mobile"} {reminderCustomer.village ? `| 📍 ${reminderCustomer.village}` : ""}</p>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wider block">Total Payable</span>
+                    <span className="text-xl font-black text-emerald-800">{currency.format(reminderCustomer.summary.totalOutstanding)}</span>
+                  </div>
+                </div>
+                <div className="pt-2 border-t border-emerald-200/60 grid grid-cols-2 text-xs">
+                  <div>Principal: <span className="font-bold text-slate-800">{currency.format(reminderCustomer.summary.principal)}</span></div>
+                  <div className="text-right">Accrued Interest: <span className="font-bold text-amber-800">+{currency.format(reminderCustomer.summary.accruedInterest)}</span></div>
                 </div>
               </div>
 
-              {/* Chronological Payment Timeline */}
-              <div>
-                <h3 className="font-bold text-slate-800 text-sm mb-3">Payment Timeline & History</h3>
-                {(() => {
-                  const custPayments = payments
-                    .filter(p => p.customer_id === ledgerCustomer.id || p.customer_name === ledgerCustomer.name)
-                    .sort((a, b) => String(b.payment_date || b.created_at).localeCompare(String(a.payment_date || a.created_at)));
-
-                  if (!custPayments.length) {
-                    return <p className="text-sm text-slate-500 italic bg-slate-50 p-4 rounded">No payments recorded for this farmer yet.</p>;
-                  }
-
-                  return (
-                    <div className="relative border-l-2 border-paddy-300 ml-3 space-y-4 pl-4">
-                      {custPayments.map((p, idx) => (
-                        <div key={p.id || idx} className="relative bg-white border border-slate-200 rounded-lg p-3 shadow-sm">
-                          <div className="absolute -left-[23px] top-3.5 h-3 w-3 rounded-full bg-paddy-600 border-2 border-white" />
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <span className="font-mono text-xs font-bold text-paddy-800">{p.payment_id || `PAY-${p.id.slice(0,6)}`}</span>
-                              <p className="text-sm font-bold text-slate-800 mt-0.5">
-                                {currency.format(p.amount_paid || p.amount || 0)} — <span className="text-paddy-700">{p.payment_method || "CASH"}</span>
-                              </p>
-                              <p className="text-xs text-slate-500 mt-1">Ref Bill: {p.bill_number || p.invoice_id || "GST-BILL"}</p>
-                              {p.notes && <p className="text-xs text-slate-600 italic mt-1">"{p.notes}"</p>}
-                            </div>
-                            <div className="text-right">
-                              <p className="text-xs font-semibold text-slate-600">{p.payment_date || p.created_at?.slice(0,10)} {p.payment_time || ""}</p>
-                              <p className="text-xs font-bold text-slate-700 mt-2">
-                                Remaining Bal: {currency.format(p.remaining_outstanding ?? p.balance_amount ?? 0)}
-                              </p>
-                              <span className={`inline-block mt-1 text-[10px] px-2 py-0.5 rounded font-bold ${
-                                (p.remaining_outstanding ?? p.balance_amount) <= 0 ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
-                              }`}>
-                                {(p.remaining_outstanding ?? p.balance_amount) <= 0 ? "CLEARED" : "PARTIAL"}
-                              </span>
-                            </div>
-                          </div>
+              {/* Bill Breakdown if available */}
+              {reminderCustomer.summary.breakdown.length > 0 && (
+                <div className="border border-slate-200 rounded-lg p-3 bg-slate-50 space-y-2">
+                  <p className="text-xs font-bold text-slate-700">Credit Bills & Accrued Interest Breakdown</p>
+                  <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                    {reminderCustomer.summary.breakdown.map((b, idx) => (
+                      <div key={idx} className="flex justify-between items-center text-xs bg-white p-2 rounded border border-slate-200">
+                        <div>
+                          <span className="font-mono font-bold text-paddy-800">{b.invoice_id}</span>
+                          <span className="text-slate-500 ml-1.5 font-normal">({b.purchase_date} • {b.daysElapsed}d ago)</span>
                         </div>
-                      ))}
-                    </div>
-                  );
-                })()}
+                        <div className="text-right">
+                          <span className="font-semibold text-slate-700">{currency.format(b.principal)}</span>
+                          {b.accruedInterest > 0 && (
+                            <span className="text-amber-700 ml-1 text-[11px]">(+{currency.format(b.accruedInterest)})</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* WhatsApp Message Preview */}
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">WhatsApp / SMS Message Content</label>
+                <textarea
+                  readOnly
+                  rows={7}
+                  className="w-full text-xs font-mono p-3 rounded-lg border border-slate-300 bg-slate-100 text-slate-800 leading-relaxed resize-none focus:outline-none"
+                  value={reminderCustomer.message}
+                />
               </div>
+            </div>
+
+            <div className="flex gap-2 pt-2 border-t border-slate-200">
+              <button
+                onClick={() => {
+                  const cleanPhone = String(reminderCustomer.mobile || "").replace(/\D/g, "");
+                  const phoneWithCountry = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
+                  window.open(`https://api.whatsapp.com/send?phone=${phoneWithCountry}&text=${encodeURIComponent(reminderCustomer.message)}`, "_blank");
+                }}
+                className="btn flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center justify-center gap-1.5 py-2.5 text-sm"
+              >
+                <Send className="h-4 w-4" /> Send on WhatsApp
+              </button>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(reminderCustomer.message);
+                  setReminderCopied(true);
+                  setTimeout(() => setReminderCopied(false), 2000);
+                }}
+                className="btn-secondary px-3.5 py-2.5 text-xs font-bold flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300"
+              >
+                {reminderCopied ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
+                {reminderCopied ? "Copied!" : "Copy"}
+              </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* Customer Detailed Payment Ledger Modal */}
+      {ledgerCustomer && (() => {
+        const custCredit = getCustomerCreditSummary(ledgerCustomer, creditLedger, sales);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl flex flex-col max-h-[90vh]">
+              <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-900">Farmer Ledger: {ledgerCustomer.name}</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Mobile: {ledgerCustomer.mobile || "-"} | Village: {ledgerCustomer.village || "-"} | 
+                    Aadhaar: {ledgerCustomer.aadhaar ? `XXXX XXXX ${ledgerCustomer.aadhaar.replace(/\D/g,"").slice(-4)}` : "Not provided"}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  {custCredit.totalOutstanding > 0 && (
+                    <button 
+                      onClick={() => openReminderModal(ledgerCustomer, custCredit)}
+                      className="btn-secondary text-xs py-1.5 px-3 bg-emerald-700 text-white font-bold hover:bg-emerald-800 flex items-center gap-1"
+                    >
+                      <Bell className="h-3.5 w-3.5" /> Send Reminder
+                    </button>
+                  )}
+                  <button onClick={() => setLedgerCustomer(null)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                    <X className="h-5 w-5 text-slate-500" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-5 overflow-y-auto space-y-6">
+                {/* Ledger Summary Cards */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 bg-slate-50 p-4 rounded-lg border border-slate-200">
+                  <Mini 
+                    label="Total Paid To Date" 
+                    value={currency.format(
+                      payments
+                        .filter(p => p.customer_id === ledgerCustomer.id || p.customer_name === ledgerCustomer.name)
+                        .reduce((sum, p) => sum + Number(p.amount_paid || p.amount || 0), 0)
+                    )} 
+                  />
+                  <Mini label="Principal Dues" value={currency.format(custCredit.principal)} />
+                  <Mini label="Accrued Interest" value={currency.format(custCredit.accruedInterest)} />
+                  <Mini label="Total Payable" value={currency.format(custCredit.totalOutstanding)} />
+                </div>
+
+                {/* Active Credit Invoices with Purchase Date & Accrued Interest */}
+                {custCredit.breakdown.length > 0 && (
+                  <div>
+                    <h3 className="font-bold text-slate-800 text-sm mb-2.5">Credit Bills & Accrued Interest Breakdown</h3>
+                    <div className="overflow-x-auto rounded border border-slate-200">
+                      <table className="w-full text-xs">
+                        <thead className="bg-amber-50/60 text-left font-bold text-amber-950">
+                          <tr>
+                            <th className="p-2">Invoice No</th>
+                            <th className="p-2">Purchase Date</th>
+                            <th className="p-2">Days Elapsed</th>
+                            <th className="p-2">Principal</th>
+                            <th className="p-2">Interest Rate</th>
+                            <th className="p-2">Accrued Interest</th>
+                            <th className="p-2">Bill Total</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {custCredit.breakdown.map((b, idx) => (
+                            <tr key={b.id || idx} className="hover:bg-slate-50">
+                              <td className="p-2 font-mono font-bold text-paddy-800">{b.invoice_id}</td>
+                              <td className="p-2">{b.purchase_date}</td>
+                              <td className="p-2 font-semibold text-slate-600">{b.daysElapsed} days</td>
+                              <td className="p-2 font-semibold">{currency.format(b.principal)}</td>
+                              <td className="p-2">{b.rate}%/mo</td>
+                              <td className="p-2 font-bold text-amber-700">+{currency.format(b.accruedInterest)}</td>
+                              <td className="p-2 font-black text-slate-800">{currency.format(b.totalDue)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Chronological Payment Timeline */}
+                <div>
+                  <h3 className="font-bold text-slate-800 text-sm mb-3">Payment Timeline & History</h3>
+                  {(() => {
+                    const custPayments = payments
+                      .filter(p => p.customer_id === ledgerCustomer.id || p.customer_name === ledgerCustomer.name)
+                      .sort((a, b) => String(b.payment_date || b.created_at).localeCompare(String(a.payment_date || a.created_at)));
+
+                    if (!custPayments.length) {
+                      return <p className="text-sm text-slate-500 italic bg-slate-50 p-4 rounded">No payments recorded for this farmer yet.</p>;
+                    }
+
+                    return (
+                      <div className="relative border-l-2 border-paddy-300 ml-3 space-y-4 pl-4">
+                        {custPayments.map((p, idx) => (
+                          <div key={p.id || idx} className="relative bg-white border border-slate-200 rounded-lg p-3 shadow-sm">
+                            <div className="absolute -left-[23px] top-3.5 h-3 w-3 rounded-full bg-paddy-600 border-2 border-white" />
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <span className="font-mono text-xs font-bold text-paddy-800">{p.payment_id || `PAY-${p.id.slice(0,6)}`}</span>
+                                <p className="text-sm font-bold text-slate-800 mt-0.5">
+                                  {currency.format(p.amount_paid || p.amount || 0)} — <span className="text-paddy-700">{p.payment_method || "CASH"}</span>
+                                </p>
+                                <p className="text-xs text-slate-500 mt-1">Ref Bill: {p.bill_number || p.invoice_id || "GST-BILL"}</p>
+                                {p.notes && <p className="text-xs text-slate-600 italic mt-1">"{p.notes}"</p>}
+                              </div>
+                              <div className="text-right">
+                                <p className="text-xs font-semibold text-slate-600">{p.payment_date || p.created_at?.slice(0,10)} {p.payment_time || ""}</p>
+                                <p className="text-xs font-bold text-slate-700 mt-2">
+                                  Remaining Bal: {currency.format(p.remaining_outstanding ?? p.balance_amount ?? 0)}
+                                </p>
+                                <span className={`inline-block mt-1 text-[10px] px-2 py-0.5 rounded font-bold ${
+                                  (p.remaining_outstanding ?? p.balance_amount) <= 0 ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+                                }`}>
+                                  {(p.remaining_outstanding ?? p.balance_amount) <= 0 ? "CLEARED" : "PARTIAL"}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
+
 
 function Stock({ api, notify }) {
   const [products, setProducts] = useState([]);

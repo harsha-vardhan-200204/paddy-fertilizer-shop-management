@@ -20,6 +20,9 @@ const collections = [
   "purchases",
   "purchase_items",
   "payments",
+  "farmer_credit_ledger",
+  "credit_payments",
+  "interest_history",
   "stock_logs"
 ];
 
@@ -70,6 +73,50 @@ export class FileStore {
       }
       if (updatedUsers) {
         await this.persist();
+      }
+
+      for (const col of collections) {
+        if (!Array.isArray(this.db[col])) {
+          this.db[col] = [];
+        }
+      }
+
+      if (this.db.farmer_credit_ledger.length === 0 && (this.db.sales || []).length > 0) {
+        let seededLedger = false;
+        for (const sale of this.db.sales) {
+          if (Number(sale.balance_due || 0) > 0 && sale.customer_id) {
+            const match = String(sale.payment_method || "").match(/@\s*([0-9.]+)%/);
+            const interestRate = match ? Number(match[1]) : 2;
+            const daysMatch = String(sale.payment_method || "").match(/([0-9]+)\s*Days/i);
+            const creditDays = daysMatch ? Number(daysMatch[1]) : 30;
+            const pDate = sale.date || (sale.created_at ? sale.created_at.slice(0, 10) : today());
+            const dueDate = new Date(new Date(pDate).getTime() + creditDays * 86400000).toISOString().slice(0, 10);
+            this.db.farmer_credit_ledger.push({
+              id: id(),
+              customer_id: sale.customer_id,
+              farmer_id: sale.customer_id,
+              farmer_name: sale.customer_name || "Customer",
+              mobile: sale.mobile || "",
+              village: sale.village || "",
+              invoice_id: sale.invoice_number,
+              sale_id: sale.id,
+              purchase_date: pDate,
+              due_date: dueDate,
+              credit_amount: Number(sale.balance_due),
+              principal_amount: Number(sale.balance_due),
+              outstanding_principal: Number(sale.balance_due),
+              amount_paid: 0,
+              interest_rate: interestRate,
+              credit_due_days: creditDays,
+              status: "PENDING",
+              created_at: sale.created_at || now()
+            });
+            seededLedger = true;
+          }
+        }
+        if (seededLedger) {
+          await this.persist();
+        }
       }
     } catch (_error) {
       this.db = Object.fromEntries(collections.map((key) => [key, []]));
@@ -250,6 +297,31 @@ export class FileStore {
         this.db.customers[customerIndex].pending_balance = round(Number(this.db.customers[customerIndex].pending_balance || 0) + sale.balance_due);
         this.db.customers[customerIndex].credit_amount = this.db.customers[customerIndex].pending_balance;
       }
+      const creditDays = Number(data.credit_days || 30);
+      const interestRate = Number(data.interest_rate || 2);
+      const pDate = sale.date || today();
+      const dueDate = new Date(new Date(pDate).getTime() + creditDays * 86400000).toISOString().slice(0, 10);
+      this.db.farmer_credit_ledger = this.db.farmer_credit_ledger || [];
+      this.db.farmer_credit_ledger.push({
+        id: id(),
+        customer_id: sale.customer_id,
+        farmer_id: sale.customer_id,
+        farmer_name: sale.customer_name,
+        mobile: sale.mobile,
+        village: sale.village,
+        invoice_id: sale.invoice_number,
+        sale_id: sale.id,
+        purchase_date: pDate,
+        due_date: dueDate,
+        credit_amount: sale.balance_due,
+        principal_amount: sale.balance_due,
+        outstanding_principal: sale.balance_due,
+        amount_paid: 0,
+        interest_rate: interestRate,
+        credit_due_days: creditDays,
+        status: "PENDING",
+        created_at: now()
+      });
     }
     if (sale.amount_paid > 0) {
       const paymentTime = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
@@ -420,6 +492,9 @@ export class FileStore {
     this.db.sales = [];
     this.db.sale_items = [];
     this.db.payments = [];
+    this.db.farmer_credit_ledger = [];
+    this.db.credit_payments = [];
+    this.db.interest_history = [];
     for (const cust of this.db.customers || []) {
       cust.pending_balance = 0;
       cust.credit_amount = 0;
@@ -483,6 +558,20 @@ export class FileStore {
     if (customer) {
       customer.pending_balance = remainingOutstanding;
       customer.credit_amount = remainingOutstanding;
+
+      if (this.db.farmer_credit_ledger) {
+        let unallocated = amountPaid;
+        for (const ledger of this.db.farmer_credit_ledger) {
+          if ((ledger.customer_id === customer.id || ledger.farmer_id === customer.id) && Number(ledger.outstanding_principal || 0) > 0) {
+            const payTowards = Math.min(Number(ledger.outstanding_principal || 0), unallocated);
+            ledger.outstanding_principal = round(Number(ledger.outstanding_principal) - payTowards);
+            ledger.amount_paid = round(Number(ledger.amount_paid || 0) + payTowards);
+            ledger.status = ledger.outstanding_principal <= 0 ? "CLEARED" : "PARTIAL";
+            unallocated = round(unallocated - payTowards);
+            if (unallocated <= 0) break;
+          }
+        }
+      }
     }
 
     if (data.sale_id || data.bill_number || data.invoice_id) {

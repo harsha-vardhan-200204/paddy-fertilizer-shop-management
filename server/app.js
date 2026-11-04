@@ -129,7 +129,7 @@ app.post("/api/insights/settings", asyncRoute(async (req, res) => {
   res.json({ message: "Insights settings updated successfully", settings: updated });
 }));
 
-for (const resource of ["products", "customers", "suppliers"]) {
+for (const resource of ["products", "customers", "suppliers", "farmer_credit_ledger", "credit_payments", "interest_history"]) {
   app.get(`/api/${resource}`, asyncRoute(async (req, res) => {
     res.json(await store.list(resource, req.query));
   }));
@@ -204,11 +204,11 @@ app.delete("/api/purchases/:id", requireAdmin, asyncRoute(async (req, res) => {
   res.status(204).end();
 }));
 
-app.get(["/api/payments", "/api/farmer_payments", "/api/credit_payments"], asyncRoute(async (req, res) => {
+app.get(["/api/payments", "/api/farmer_payments"], asyncRoute(async (req, res) => {
   res.json(await store.list("payments", req.query));
 }));
 
-app.post(["/api/payments", "/api/farmer_payments", "/api/credit_payments", "/api/farmer_credit_ledger"], asyncRoute(async (req, res) => {
+app.post(["/api/payments", "/api/farmer_payments"], asyncRoute(async (req, res) => {
   const payment = await store.createPayment(req.body, req.user);
   predictionEngine.checkAndTriggerRetrain(store).catch(console.error);
   res.status(201).json(payment);
