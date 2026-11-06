@@ -63,6 +63,43 @@ const reportTypes = [
   ["date-wise-invoices", "Date-wise Invoices"]
 ];
 
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, errorInfo) {
+    console.error("ErrorBoundary caught an error:", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="rounded-xl border border-red-200 bg-white p-6 shadow-soft my-6 text-center space-y-4">
+          <div className="h-12 w-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto">
+            <AlertTriangle className="h-6 w-6" />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold text-slate-900">Something went wrong rendering this screen</h3>
+            <p className="text-sm text-slate-500 mt-1">{this.state.error?.message || "An unexpected error occurred."}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload(); }}
+            className="btn py-2 px-4 text-xs font-bold"
+          >
+            Reload Screen
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function App() {
   const [session, setSession] = useState(() => JSON.parse(localStorage.getItem("paddy-session") || "null"));
   const [screen, setScreen] = useState("dashboard");
@@ -101,17 +138,19 @@ function App() {
       <main className="min-h-screen lg:pl-[264px] flex flex-col pb-20 lg:pb-8 transition-all">
         <Header screen={screen} onToggleSidebar={() => setSidebarOpen((prev) => !prev)} />
         <div className="w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 flex-1">
-          {screen === "dashboard" && <Dashboard api={api} setScreen={setScreen} />}
-          {screen === "products" && <Products api={api} notify={setToast} />}
-          {screen === "billing" && <Billing api={api} notify={setToast} />}
-          {screen === "purchases" && <Purchases api={api} notify={setToast} user={session.user} />}
-          {screen === "customers" && <Customers api={api} notify={setToast} />}
-          {screen === "suppliers" && <Suppliers api={api} notify={setToast} />}
-          {screen === "farmer_payments" && <FarmerPayments api={api} notify={setToast} />}
-          {screen === "stock" && <Stock api={api} notify={setToast} />}
-          {screen === "reports" && <Reports api={api} notify={setToast} />}
-          {screen === "insights" && <BusinessInsights api={api} notify={setToast} setScreen={setScreen} />}
-          {screen === "reset" && <BusinessReset api={api} notify={setToast} setScreen={setScreen} user={session.user} />}
+          <ErrorBoundary>
+            {screen === "dashboard" && <Dashboard api={api} setScreen={setScreen} notify={setToast} />}
+            {screen === "products" && <Products api={api} notify={setToast} />}
+            {screen === "billing" && <Billing api={api} notify={setToast} />}
+            {screen === "purchases" && <Purchases api={api} notify={setToast} user={session.user} />}
+            {screen === "customers" && <Customers api={api} notify={setToast} />}
+            {screen === "suppliers" && <Suppliers api={api} notify={setToast} />}
+            {screen === "farmer_payments" && <FarmerPayments api={api} notify={setToast} />}
+            {screen === "stock" && <Stock api={api} notify={setToast} />}
+            {screen === "reports" && <Reports api={api} notify={setToast} />}
+            {screen === "insights" && <BusinessInsights api={api} notify={setToast} setScreen={setScreen} />}
+            {screen === "reset" && <BusinessReset api={api} notify={setToast} setScreen={setScreen} user={session.user} />}
+          </ErrorBoundary>
         </div>
       </main>
 
@@ -502,7 +541,7 @@ function ExpiryAlertModal({ isOpen, onClose, api, notify }) {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan="6" className="p-4 text-center text-slate-400">No products expiring within ${threshold} days. Godown stock is healthy!</td>
+                    <td colSpan="6" className="p-4 text-center text-slate-400">No products expiring within {threshold} days. Godown stock is healthy!</td>
                   </tr>
                 )}
               </tbody>
@@ -564,7 +603,7 @@ function ExpiryAlertModal({ isOpen, onClose, api, notify }) {
 }
 
 
-function Dashboard({ api, setScreen }) {
+function Dashboard({ api, setScreen, notify = () => {} }) {
   const [data, setData] = useState(null);
   const [biSummary, setBiSummary] = useState(null);
   const [expiryModalOpen, setExpiryModalOpen] = useState(false);
@@ -693,7 +732,7 @@ function Dashboard({ api, setScreen }) {
       <Panel title="Low Stock Alerts">
         <DataTable rows={data.lowStock} columns={["name", "brand", "batch_number", "current_stock", "minimum_stock_alert", "unit"]} empty="No low stock products." />
       </Panel>
-      <ExpiryAlertModal isOpen={expiryModalOpen} onClose={() => setExpiryModalOpen(false)} api={api} notify={notify || alert} />
+      <ExpiryAlertModal isOpen={expiryModalOpen} onClose={() => setExpiryModalOpen(false)} api={api} notify={notify} />
     </div>
   );
 }
