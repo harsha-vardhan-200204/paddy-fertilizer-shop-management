@@ -58,6 +58,7 @@ const reportTypes = [
   ["cgst", "CGST Report"],
   ["sgst", "SGST Report"],
   ["taxable", "Taxable / Non-taxable"],
+  ["monthly-executive", "Executive Monthly Report (Stock, Revenue, Credit)"],
   ["hsn", "HSN-wise Report"],
   ["date-wise-invoices", "Date-wise Invoices"]
 ];
@@ -342,9 +343,231 @@ function Header({ screen, onToggleSidebar }) {
   );
 }
 
+
+// ==========================================
+// FEATURE A: REGULATORY BATCH EXPIRY ALERT MODAL
+// ==========================================
+function ExpiryAlertModal({ isOpen, onClose, api, notify }) {
+  const [data, setData] = useState({ summary: {}, items: [] });
+  const [threshold, setThreshold] = useState(90);
+  const [loading, setLoading] = useState(false);
+  const [recipient, setRecipient] = useState({ phone: "8660548244", email: "manager@anjanagro.com", name: "Distributor / Store Manager" });
+  const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setLoading(true);
+      api.get(`/alerts/expiry?threshold=${threshold}`)
+        .then(res => setData(res))
+        .catch(err => notify(err.message || "Failed to load expiry data."))
+        .finally(() => setLoading(false));
+    }
+  }, [isOpen, threshold]);
+
+  if (!isOpen) return null;
+
+  const handleSendWhatsApp = async () => {
+    try {
+      setSending(true);
+      const res = await api.post("/alerts/send-expiry", {
+        recipientPhone: recipient.phone,
+        recipientEmail: recipient.email,
+        recipientName: recipient.name,
+        targetItems: data.items
+      });
+      notify("WhatsApp alert message generated!");
+      if (res.whatsappUrl) {
+        window.open(res.whatsappUrl, "_blank");
+      }
+    } catch (err) {
+      notify(err.message || "Failed to prepare alert.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleSendEmail = async () => {
+    try {
+      setSending(true);
+      const res = await api.post("/alerts/send-expiry", {
+        recipientPhone: recipient.phone,
+        recipientEmail: recipient.email,
+        recipientName: recipient.name,
+        targetItems: data.items
+      });
+      notify("Email alert notice dispatched!");
+      if (res.mailtoUrl) {
+        window.location.href = res.mailtoUrl;
+      }
+    } catch (err) {
+      notify(err.message || "Failed to dispatch email.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl flex flex-col max-h-[92vh] overflow-hidden border border-orange-200">
+        <div className="p-4 bg-gradient-to-r from-orange-700 to-amber-700 text-white flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <Bell className="h-6 w-6 text-amber-200" />
+            <div>
+              <h2 className="text-lg font-bold">Regulatory Batch Expiry Alert Center</h2>
+              <p className="text-xs text-orange-100">Sree Anjaneya Agro Agencies, Davanagere • Insecticides Act & FCO Compliance</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 hover:bg-white/20 rounded-full transition-colors text-white">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="p-4 sm:p-5 overflow-y-auto space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-orange-50 border border-orange-200 p-3 rounded-lg">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-orange-900">Alert Window:</span>
+              <button
+                type="button"
+                onClick={() => setThreshold(30)}
+                className={`px-3 py-1 rounded text-xs font-semibold ${threshold === 30 ? "bg-red-600 text-white" : "bg-white border text-slate-700 hover:bg-slate-50"}`}
+              >
+                Critical (≤ 30 Days)
+              </button>
+              <button
+                type="button"
+                onClick={() => setThreshold(60)}
+                className={`px-3 py-1 rounded text-xs font-semibold ${threshold === 60 ? "bg-amber-600 text-white" : "bg-white border text-slate-700 hover:bg-slate-50"}`}
+              >
+                ≤ 60 Days
+              </button>
+              <button
+                type="button"
+                onClick={() => setThreshold(90)}
+                className={`px-3 py-1 rounded text-xs font-semibold ${threshold === 90 ? "bg-orange-600 text-white" : "bg-white border text-slate-700 hover:bg-slate-50"}`}
+              >
+                Standard (≤ 90 Days)
+              </button>
+            </div>
+
+            <div className="text-right">
+              <span className="text-xs text-slate-600 block">Total Loss Risk Valuation:</span>
+              <span className="text-base font-extrabold text-red-700">{currency.format(data.summary?.total_stock_value_at_risk || 0)}</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3">
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-center">
+              <span className="text-xs text-red-700 font-medium block">Critical Batches (≤30d / Expired)</span>
+              <span className="text-xl font-bold text-red-800">{data.summary?.critical_count || 0}</span>
+            </div>
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-center">
+              <span className="text-xs text-amber-700 font-medium block">Watchlist Batches (≤90d)</span>
+              <span className="text-xl font-bold text-amber-800">{data.summary?.warning_count || 0}</span>
+            </div>
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-center">
+              <span className="text-xs text-slate-600 font-medium block">Total At-Risk SKUs</span>
+              <span className="text-xl font-bold text-slate-800">{data.summary?.total_items_at_risk || 0}</span>
+            </div>
+          </div>
+
+          <div className="border border-slate-200 rounded-lg overflow-hidden max-h-64 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-100 sticky top-0 font-bold text-slate-700">
+                <tr>
+                  <th className="p-2 text-left">Product Name</th>
+                  <th className="p-2 text-left">Batch No</th>
+                  <th className="p-2 text-center">Stock</th>
+                  <th className="p-2 text-center">Expiry Date</th>
+                  <th className="p-2 text-center">Status</th>
+                  <th className="p-2 text-right">Value at Risk</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {data.items?.length ? (
+                  data.items.map(item => (
+                    <tr key={item.id} className="hover:bg-slate-50">
+                      <td className="p-2 font-medium text-slate-900">{item.name}</td>
+                      <td className="p-2 font-mono text-slate-600">{item.batch_number}</td>
+                      <td className="p-2 text-center">{item.current_stock} {item.unit}</td>
+                      <td className="p-2 text-center font-medium">{item.expiry_date}</td>
+                      <td className="p-2 text-center">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                          item.days_remaining <= 0 ? "bg-red-100 text-red-800" : (item.days_remaining <= 30 ? "bg-orange-100 text-orange-800" : "bg-amber-100 text-amber-800")
+                        }`}>
+                          {item.days_remaining <= 0 ? "EXPIRED" : `${item.days_remaining}d left`}
+                        </span>
+                      </td>
+                      <td className="p-2 text-right font-bold text-slate-800">{currency.format(item.value_at_risk)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan="6" className="p-4 text-center text-slate-400">No products expiring within ${threshold} days. Godown stock is healthy!</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-lg space-y-3">
+            <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wide">Dispatch Expiry Alert to Distributor / Owner</h4>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="text-[11px] font-medium text-slate-600 block mb-0.5">Recipient Name</label>
+                <input
+                  className="h-9 w-full rounded border border-slate-200 px-2.5 text-xs outline-none focus:border-orange-500"
+                  value={recipient.name}
+                  onChange={(e) => setRecipient({ ...recipient, name: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-medium text-slate-600 block mb-0.5">WhatsApp Mobile</label>
+                <input
+                  className="h-9 w-full rounded border border-slate-200 px-2.5 text-xs outline-none focus:border-orange-500"
+                  value={recipient.phone}
+                  onChange={(e) => setRecipient({ ...recipient, phone: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-medium text-slate-600 block mb-0.5">Email Address</label>
+                <input
+                  className="h-9 w-full rounded border border-slate-200 px-2.5 text-xs outline-none focus:border-orange-500"
+                  value={recipient.email}
+                  onChange={(e) => setRecipient({ ...recipient, email: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2 pt-1">
+              <button
+                type="button"
+                disabled={sending || !data.items?.length}
+                onClick={handleSendWhatsApp}
+                className="btn-secondary flex-1 py-2 text-xs bg-emerald-700 text-white hover:bg-emerald-800 flex items-center justify-center gap-1.5 font-bold disabled:opacity-50"
+              >
+                <Send className="h-4 w-4" /> Send Expiry Alert via WhatsApp
+              </button>
+              <button
+                type="button"
+                disabled={sending || !data.items?.length}
+                onClick={handleSendEmail}
+                className="btn-secondary flex-1 py-2 text-xs bg-blue-700 text-white hover:bg-blue-800 flex items-center justify-center gap-1.5 font-bold disabled:opacity-50"
+              >
+                <ReceiptText className="h-4 w-4" /> Dispatch Regulatory Email Notice
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function Dashboard({ api, setScreen }) {
   const [data, setData] = useState(null);
   const [biSummary, setBiSummary] = useState(null);
+  const [expiryModalOpen, setExpiryModalOpen] = useState(false);
 
   useEffect(() => {
     api.get("/dashboard").then(setData).catch(console.error);
@@ -387,6 +610,12 @@ function Dashboard({ api, setScreen }) {
                 <span className="text-lg font-black text-paddy-900">{biSummary.health.score} / 100</span>
                 <span className="text-xs font-semibold text-paddy-700 ml-1.5">({biSummary.health.status})</span>
               </div>
+              <button
+                onClick={() => setExpiryModalOpen(true)}
+                className="btn-secondary py-2 px-3 text-xs font-bold bg-orange-600 text-white hover:bg-orange-700 flex items-center gap-1.5 transition-colors shadow-sm"
+              >
+                <Bell className="h-4 w-4" /> Expiry Alert Center
+              </button>
               <button
                 onClick={() => setScreen("insights")}
                 className="btn py-2 px-3 text-xs font-bold"
@@ -464,6 +693,7 @@ function Dashboard({ api, setScreen }) {
       <Panel title="Low Stock Alerts">
         <DataTable rows={data.lowStock} columns={["name", "brand", "batch_number", "current_stock", "minimum_stock_alert", "unit"]} empty="No low stock products." />
       </Panel>
+      <ExpiryAlertModal isOpen={expiryModalOpen} onClose={() => setExpiryModalOpen(false)} api={api} notify={notify || alert} />
     </div>
   );
 }
@@ -473,6 +703,8 @@ function Dashboard({ api, setScreen }) {
 // Manages stock inventory, HSN codes, GST rates, batch numbers, and chemical expiry dates
 // ==========================================
 function Products({ api, notify }) {
+  const [formErrors, setFormErrors] = useState({});
+  const [expiryModalOpen, setExpiryModalOpen] = useState(false);
   const blank = {
     product_number: "PRD-3102",
     name: "",
@@ -570,13 +802,39 @@ function Products({ api, notify }) {
   };
 
   // // Saves new product or updates existing product record in backend store
+  function validateProduct() {
+    const errs = {};
+    if (!form.name || form.name.trim().length < 2) errs.name = "Product name is required (min 2 chars).";
+    if (!form.category || form.category.trim().length === 0) errs.category = "Category is required.";
+    if (!form.hsn_code || !/^\d{2,8}$/.test(String(form.hsn_code).trim())) errs.hsn_code = "HSN code must be 2 to 8 numeric digits.";
+    const pCost = Number(form.purchase_price);
+    const sRate = Number(form.selling_price);
+    if (isNaN(pCost) || pCost <= 0) errs.purchase_price = "Purchase rate must be > 0.";
+    if (isNaN(sRate) || sRate <= 0) errs.selling_price = "Selling rate must be > 0.";
+    else if (!isNaN(pCost) && sRate < pCost) errs.selling_price = `Selling rate (₹${sRate}) cannot be lower than cost (₹${pCost}).`;
+    if (!form.batch_number || form.batch_number.trim().length === 0) errs.batch_number = "Batch number is required.";
+    if (!form.expiry_date) errs.expiry_date = "Expiry date is required for chemical shelf-life.";
+    setFormErrors(errs);
+    return Object.keys(errs).length === 0;
+  }
+
   async function save() {
-    editing ? await api.put(`/products/${editing}`, form) : await api.post("/products", form);
-    setForm(blank);
-    setEditing(null);
-    notify("Product saved");
-    setTimeout(() => notify(""), 2200);
-    load();
+    if (!validateProduct()) {
+      notify("Please resolve highlighted validation errors before saving product.");
+      setTimeout(() => notify(""), 3000);
+      return;
+    }
+    try {
+      editing ? await api.put(`/products/${editing}`, form) : await api.post("/products", form);
+      setForm(blank);
+      setEditing(null);
+      setFormErrors({});
+      notify("Product saved successfully!");
+      setTimeout(() => notify(""), 2200);
+      load();
+    } catch (err) {
+      notify(err.message || "Failed to save product.");
+    }
   }
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] xl:grid-cols-[410px_1fr] gap-6">
@@ -622,26 +880,37 @@ function Products({ api, notify }) {
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <Input label="Product Name" value={form.name} onChange={(name) => setForm({ ...form, name })} />
+          <Input label="Product Name" required error={formErrors.name} value={form.name} onChange={(name) => { setForm({ ...form, name }); if (formErrors.name) setFormErrors({ ...formErrors, name: null }); }} />
           <Input label="Brand" value={form.brand} onChange={(brand) => setForm({ ...form, brand })} />
-          <Input label="Category" value={form.category} onChange={(category) => setForm({ ...form, category })} />
+          <Input label="Category" required error={formErrors.category} value={form.category} onChange={(category) => { setForm({ ...form, category }); if (formErrors.category) setFormErrors({ ...formErrors, category: null }); }} />
           <Select label="Type" value={form.product_type} options={productTypes} onChange={(product_type) => setForm({ ...form, product_type })} />
-          <Input label="HSN Code" value={form.hsn_code} onChange={(hsn_code) => setForm({ ...form, hsn_code })} />
+          <Input label="HSN Code" required error={formErrors.hsn_code} value={form.hsn_code} onChange={(hsn_code) => { setForm({ ...form, hsn_code }); if (formErrors.hsn_code) setFormErrors({ ...formErrors, hsn_code: null }); }} />
           <Input label="GST %" type="number" value={form.gst_percent} onChange={(gst_percent) => setForm({ ...form, gst_percent })} />
-          <Input label="Batch Number" value={form.batch_number} onChange={(batch_number) => setForm({ ...form, batch_number })} />
+          <Input label="Batch Number" required error={formErrors.batch_number} value={form.batch_number} onChange={(batch_number) => { setForm({ ...form, batch_number }); if (formErrors.batch_number) setFormErrors({ ...formErrors, batch_number: null }); }} />
           <Select label="Unit" value={form.unit} options={units} onChange={(unit) => setForm({ ...form, unit })} />
           <Input label="Manufacture Date" type="date" value={form.manufacture_date} onChange={(manufacture_date) => setForm({ ...form, manufacture_date })} />
-          <Input label="Expiry Date" type="date" value={form.expiry_date} onChange={(expiry_date) => setForm({ ...form, expiry_date })} />
-          <Input label="Purchase Price" type="number" value={form.purchase_price} onChange={(purchase_price) => setForm({ ...form, purchase_price })} />
+          <Input label="Expiry Date" required error={formErrors.expiry_date} type="date" value={form.expiry_date} onChange={(expiry_date) => { setForm({ ...form, expiry_date }); if (formErrors.expiry_date) setFormErrors({ ...formErrors, expiry_date: null }); }} />
+          <Input label="Purchase Price" required error={formErrors.purchase_price} type="number" value={form.purchase_price} onChange={(purchase_price) => { setForm({ ...form, purchase_price }); if (formErrors.purchase_price) setFormErrors({ ...formErrors, purchase_price: null }); }} />
           <Input label="MRP" type="number" value={form.mrp} onChange={(mrp) => setForm({ ...form, mrp })} />
-          <Input label="Selling Price" type="number" value={form.selling_price} onChange={(selling_price) => setForm({ ...form, selling_price })} />
+          <Input label="Selling Price" required error={formErrors.selling_price} type="number" value={form.selling_price} onChange={(selling_price) => { setForm({ ...form, selling_price }); if (formErrors.selling_price) setFormErrors({ ...formErrors, selling_price: null }); }} />
           <Input label="Current Stock" type="number" value={form.current_stock} onChange={(current_stock) => setForm({ ...form, current_stock })} />
           <Input label="Minimum Alert" type="number" value={form.minimum_stock_alert} onChange={(minimum_stock_alert) => setForm({ ...form, minimum_stock_alert })} />
           <Input label="Supplier Name" value={form.supplier_name} onChange={(supplier_name) => setForm({ ...form, supplier_name })} />
         </div>
         <button onClick={save} className="btn mt-5 w-full"><Save className="h-5 w-5" /> Save Product</button>
       </Panel>
-      <Panel title="Product List" actions={<SearchBox value={search} setValue={setSearch} />}>
+      <Panel title="Product List" actions={
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setExpiryModalOpen(true)}
+            className="btn-secondary text-xs py-1.5 px-3 bg-orange-50 border-orange-300 text-orange-800 hover:bg-orange-100 flex items-center gap-1.5 font-bold transition-all shadow-sm"
+          >
+            <Bell className="h-4 w-4 text-orange-600" /> Expiry Alerts Center
+          </button>
+          <SearchBox value={search} setValue={setSearch} />
+        </div>
+      }>
         <DataTable
           rows={rows}
           columns={["name", "brand", "product_type", "hsn_code", "gst_percent", "batch_number", "selling_price", "current_stock", "unit"]}
@@ -650,6 +919,7 @@ function Products({ api, notify }) {
           )}
         />
       </Panel>
+      <ExpiryAlertModal isOpen={expiryModalOpen} onClose={() => setExpiryModalOpen(false)} api={api} notify={notify} />
     </div>
   );
 }
@@ -773,10 +1043,56 @@ function Billing({ api, notify }) {
   const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(upiUri)}`;
 
   async function saveInvoice() {
+    if (!lines || lines.length === 0) {
+      notify("Cart is empty! Please add at least one product item to create an invoice.");
+      return;
+    }
+    for (const line of lines) {
+      const q = Number(line.qty);
+      if (isNaN(q) || q <= 0) {
+        notify(`Quantity for '${line.product?.name || "product"}' must be greater than zero.`);
+        return;
+      }
+      const availableStock = Number(line.product?.current_stock ?? 9999);
+      if (q > availableStock) {
+        notify(`Stock Limit Error: Only ${availableStock} ${line.product?.unit || "units"} available for '${line.product?.name}'. Requested: ${q}.`);
+        return;
+      }
+    }
+    if (form.customer_mobile && form.customer_mobile.trim()) {
+      const cleanMobile = form.customer_mobile.trim().replace(/\D/g, "");
+      if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
+        notify("Invalid customer mobile number. Must be a 10-digit Indian number starting with 6-9.");
+        return;
+      }
+    }
     if (form.customer_aadhaar && form.customer_aadhaar.trim()) {
       const cleanedAadhaar = form.customer_aadhaar.replace(/\D/g, "");
       if (cleanedAadhaar.length !== 12) {
         notify("Customer Aadhaar Number must be exactly 12 numeric digits if provided.");
+        return;
+      }
+    }
+    const creditPortion = form.payment_method === "Credit" ? grand : (form.payment_method === "Mixed" ? Number(mixedAmounts.Credit || 0) : 0);
+    if (creditPortion > 0) {
+      if (!form.customer_id) {
+        notify("Farmer / Customer selection is required when issuing credit (Udhaari).");
+        return;
+      }
+      const selectedCust = customers.find(c => c.id === form.customer_id);
+      if (selectedCust) {
+        const creditLimit = Number(selectedCust.credit_amount || selectedCust.credit_limit || 0);
+        const currentBalance = Number(selectedCust.pending_balance || 0);
+        if (creditLimit > 0 && (currentBalance + creditPortion) > creditLimit) {
+          notify(`Credit ceiling exceeded! Assigned Limit: ₹${creditLimit.toFixed(2)}, Current Balance: ₹${currentBalance.toFixed(2)}, Remaining Allowance: ₹${Math.max(0, creditLimit - currentBalance).toFixed(2)}.`);
+          return;
+        }
+      }
+    }
+    if (form.payment_method === "Mixed") {
+      const mixedSum = Number(mixedAmounts.Cash || 0) + Number(mixedAmounts.UPI || 0) + Number(mixedAmounts.Card || 0) + Number(mixedAmounts.Credit || 0);
+      if (Math.abs(mixedSum - grand) > 0.5) {
+        notify(`Split tenders total (₹${mixedSum.toFixed(2)}) must exactly equal Invoice Grand Total (₹${grand.toFixed(2)}).`);
         return;
       }
     }
@@ -836,7 +1152,6 @@ function Billing({ api, notify }) {
     }
 
     // Record credit in farmer_credit_ledger for Pure Credit and Mixed modes
-    const creditPortion = form.payment_method === "Credit" ? grand : (form.payment_method === "Mixed" ? Number(mixedAmounts.Credit || 0) : 0);
     if (creditPortion > 0 && form.customer_id) {
       try {
         await api.post("/farmer_credit_ledger", {
@@ -1257,6 +1572,10 @@ function Purchases({ api, notify, user }) {
   };
 
   async function save() {
+    if (!form.supplier_id && !form.supplier_name) {
+      notify("Supplier selection is required for inward vouchers.");
+      return;
+    }
     if (!form.invoice_number?.trim()) {
       notify("Please enter a supplier invoice number.");
       return;
@@ -1264,6 +1583,18 @@ function Purchases({ api, notify, user }) {
     if (!form.items?.length) {
       notify("Please add at least one product item to the purchase.");
       return;
+    }
+    for (const item of form.items) {
+      const q = Number(item.qty);
+      const rate = Number(item.purchase_rate || item.unit_cost || 0);
+      if (isNaN(q) || q <= 0) {
+        notify("Inward quantity for each item must be greater than zero.");
+        return;
+      }
+      if (isNaN(rate) || rate <= 0) {
+        notify("Purchase rate for each item must be greater than zero.");
+        return;
+      }
     }
 
     try {
@@ -1542,6 +1873,7 @@ function DataEntryLines({ products, items, setItems }) {
 function Customers({ api, notify }) {
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState({ name: "", mobile: "", village: "", address: "", credit_amount: 20000, pending_balance: 0 });
+  const [formErrors, setFormErrors] = useState({});
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState("");
   const [historyFarmer, setHistoryFarmer] = useState(null);
@@ -1550,17 +1882,38 @@ function Customers({ api, notify }) {
   const load = () => api.get(`/customers?search=${encodeURIComponent(search)}`).then(setRows);
   useEffect(() => void load(), [search]);
 
+  function validateCustomer() {
+    const errs = {};
+    if (!form.name || form.name.trim().length < 2) errs.name = "Farmer name is required (minimum 2 characters).";
+    if (form.mobile) {
+      const cleanMobile = form.mobile.trim().replace(/\D/g, "");
+      if (cleanMobile.length > 0 && !/^[6-9]\d{9}$/.test(cleanMobile)) {
+        errs.mobile = "Mobile must be a valid 10-digit Indian number starting with 6-9.";
+      }
+    }
+    if (form.credit_amount !== undefined && Number(form.credit_amount) < 0) {
+      errs.credit_amount = "Credit limit cannot be a negative amount.";
+    }
+    setFormErrors(errs);
+    return Object.keys(errs).length === 0;
+  }
+
   async function save() {
-    if (!form.name || !form.name.trim()) {
-      notify("Please enter farmer / customer name.");
+    if (!validateCustomer()) {
+      notify("Please resolve highlighted validation errors before saving farmer record.");
       return;
     }
-    editing ? await api.put(`/customers/${editing}`, form) : await api.post("/customers", form);
-    setEditing(null);
-    setForm({ name: "", mobile: "", village: "", address: "", credit_amount: 20000, pending_balance: 0 });
-    notify("Farmer record saved successfully!");
-    setTimeout(() => notify(""), 2200);
-    load();
+    try {
+      editing ? await api.put(`/customers/${editing}`, form) : await api.post("/customers", form);
+      setEditing(null);
+      setFormErrors({});
+      setForm({ name: "", mobile: "", village: "", address: "", credit_amount: 20000, pending_balance: 0 });
+      notify("Farmer record saved successfully!");
+      setTimeout(() => notify(""), 2200);
+      load();
+    } catch (err) {
+      notify(err.message || "Failed to save farmer record.");
+    }
   }
 
   const viewHistory = async (row) => {
@@ -1580,8 +1933,8 @@ function Customers({ api, notify }) {
     <>
       <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] xl:grid-cols-[380px_1fr] gap-6">
         <Panel title={editing ? "Edit Farmer Record" : "Add Farmer Record"}>
-          <Input label="Farmer Name" value={form.name} onChange={(name) => setForm({ ...form, name })} />
-          <Input label="Mobile Number" value={form.mobile} onChange={(mobile) => setForm({ ...form, mobile })} />
+          <Input label="Farmer Name" required error={formErrors.name} value={form.name} onChange={(name) => { setForm({ ...form, name }); if (formErrors.name) setFormErrors({ ...formErrors, name: null }); }} />
+          <Input label="Mobile Number" error={formErrors.mobile} value={form.mobile} onChange={(mobile) => { setForm({ ...form, mobile }); if (formErrors.mobile) setFormErrors({ ...formErrors, mobile: null }); }} />
           <Input label="Village" value={form.village} onChange={(village) => setForm({ ...form, village })} />
           <Input label="Address" value={form.address} onChange={(address) => setForm({ ...form, address })} />
           <Input label="Credit Limit (₹)" type="number" value={form.credit_amount} onChange={(credit_amount) => setForm({ ...form, credit_amount })} />
@@ -1633,8 +1986,28 @@ function Customers({ api, notify }) {
 function Suppliers({ api, notify }) {
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState({ name: "", contact_person: "", mobile: "", address: "", gstin: "", outstanding_amount: 0 });
+  const [formErrors, setFormErrors] = useState({});
   const [editing, setEditing] = useState(null);
   const [search, setSearch] = useState("");
+
+  function validateSupplier() {
+    const errs = {};
+    if (!form.name || form.name.trim().length < 2) errs.name = "Supplier / Company name is required.";
+    if (form.gstin) {
+      const cleanGST = form.gstin.trim().toUpperCase();
+      if (!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(cleanGST)) {
+        errs.gstin = "Invalid 15-char statutory GSTIN format (e.g., 29ABCDE1234F1Z5).";
+      }
+    }
+    if (form.mobile) {
+      const cleanMobile = form.mobile.trim().replace(/\D/g, "");
+      if (cleanMobile.length > 0 && !/^[6-9]\d{9}$/.test(cleanMobile)) {
+        errs.mobile = "Contact number must be a valid 10-digit mobile number.";
+      }
+    }
+    setFormErrors(errs);
+    return Object.keys(errs).length === 0;
+  }
 
   const load = () => api.get(`/suppliers?search=${encodeURIComponent(search)}`).then(setRows);
   useEffect(() => void load(), [search]);
@@ -1664,12 +2037,21 @@ function Suppliers({ api, notify }) {
   };
 
   async function save() {
-    editing ? await api.put(`/suppliers/${editing}`, form) : await api.post("/suppliers", form);
-    setEditing(null);
-    setForm({ name: "", contact_person: "", mobile: "", address: "", gstin: "", outstanding_amount: 0 });
-    notify("Supplier saved successfully");
-    setTimeout(() => notify(""), 2200);
-    load();
+    if (!validateSupplier()) {
+      notify("Please resolve highlighted supplier errors before saving.");
+      return;
+    }
+    try {
+      editing ? await api.put(`/suppliers/${editing}`, form) : await api.post("/suppliers", form);
+      setEditing(null);
+      setFormErrors({});
+      setForm({ name: "", contact_person: "", mobile: "", address: "", gstin: "", outstanding_amount: 0 });
+      notify("Supplier saved successfully");
+      setTimeout(() => notify(""), 2200);
+      load();
+    } catch (err) {
+      notify(err.message || "Failed to save supplier.");
+    }
   }
 
   return (
@@ -1693,10 +2075,10 @@ function Suppliers({ api, notify }) {
           </button>
         </div>
 
-        <Input label="Company Name" value={form.name} onChange={(name) => setForm({ ...form, name })} />
+        <Input label="Company Name" required error={formErrors.name} value={form.name} onChange={(name) => { setForm({ ...form, name }); if (formErrors.name) setFormErrors({ ...formErrors, name: null }); }} />
         <Input label="Contact Person" value={form.contact_person} onChange={(contact_person) => setForm({ ...form, contact_person })} />
-        <Input label="Mobile Number" value={form.mobile} onChange={(mobile) => setForm({ ...form, mobile })} />
-        <Input label="GSTIN" value={form.gstin} onChange={(gstin) => setForm({ ...form, gstin })} />
+        <Input label="Mobile Number" error={formErrors.mobile} value={form.mobile} onChange={(mobile) => { setForm({ ...form, mobile }); if (formErrors.mobile) setFormErrors({ ...formErrors, mobile: null }); }} />
+        <Input label="GSTIN" error={formErrors.gstin} value={form.gstin} onChange={(gstin) => { setForm({ ...form, gstin }); if (formErrors.gstin) setFormErrors({ ...formErrors, gstin: null }); }} />
         <Input label="Address" value={form.address} onChange={(address) => setForm({ ...form, address })} />
         <Input label="Outstanding Amount (₹)" type="number" value={form.outstanding_amount} onChange={(outstanding_amount) => setForm({ ...form, outstanding_amount })} />
         
@@ -2828,33 +3210,243 @@ function Reports({ api, notify }) {
   const [type, setType] = useState("sales-register");
   const [rows, setRows] = useState([]);
   const [dates, setDates] = useState({ from: new Date().toISOString().slice(0, 8) + "01", to: new Date().toISOString().slice(0, 10) });
-  const load = () => api.get(`/reports/${type}?from=${dates.from}&to=${dates.to}`).then((data) => setRows(data.rows));
-  useEffect(() => void load(), [type]);
+  const [targetMonth, setTargetMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [monthlyData, setMonthlyData] = useState(null);
+
+  const load = () => {
+    if (type === "monthly-executive") {
+      api.get(`/reports/monthly-executive?month=${targetMonth}`).then((data) => {
+        setMonthlyData(data);
+        setRows(data.rows || []);
+      }).catch(err => notify(err.message || "Failed to load monthly executive report."));
+    } else {
+      api.get(`/reports/${type}?from=${dates.from}&to=${dates.to}`).then((data) => setRows(data.rows));
+    }
+  };
+
+  useEffect(() => void load(), [type, targetMonth]);
+
   function downloadCsv() {
     const headers = Object.keys(rows[0] || {});
     const csv = [headers.join(","), ...rows.map((row) => headers.map((key) => JSON.stringify(row[key] ?? "")).join(","))].join("\n");
-    download(`${type}.csv`, csv, "text/csv");
-    notify("CSV exported");
+    download(`${type}_${targetMonth || "report"}.csv`, csv, "text/csv");
+    notify("CSV exported successfully");
     setTimeout(() => notify(""), 2200);
   }
+
   function downloadExcel() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Report");
-    XLSX.writeFile(wb, `${type}.xlsx`);
+    XLSX.writeFile(wb, `${type}_${targetMonth || "report"}.xlsx`);
+    notify("Excel spreadsheet generated");
+    setTimeout(() => notify(""), 2200);
   }
+
+  function printReport() {
+    window.print();
+  }
+
   return (
     <div className="space-y-6">
-      <Panel title="Report Filters">
+      <Panel title="Report Filters & Configuration">
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 items-end gap-3">
-          <Select label="Report" value={type} options={reportTypes.map(([key]) => key)} labels={Object.fromEntries(reportTypes)} onChange={setType} />
-          <Input label="From" type="date" value={dates.from} onChange={(from) => setDates({ ...dates, from })} />
-          <Input label="To" type="date" value={dates.to} onChange={(to) => setDates({ ...dates, to })} />
-          <button onClick={load} className="btn"><Search className="h-5 w-5" /> Search</button>
+          <Select label="Report Type" value={type} options={reportTypes.map(([key]) => key)} labels={Object.fromEntries(reportTypes)} onChange={setType} />
+          {type === "monthly-executive" ? (
+            <div className="col-span-2">
+              <label className="mt-3 block text-sm font-medium text-slate-600">
+                Select Month for Executive Audit
+                <input
+                  type="month"
+                  className="mt-1 h-11 w-full rounded-md border border-slate-200 px-3 text-slate-900 outline-none focus:border-paddy-500 font-semibold"
+                  value={targetMonth}
+                  onChange={(e) => setTargetMonth(e.target.value)}
+                />
+              </label>
+            </div>
+          ) : (
+            <>
+              <Input label="From" type="date" value={dates.from} onChange={(from) => setDates({ ...dates, from })} />
+              <Input label="To" type="date" value={dates.to} onChange={(to) => setDates({ ...dates, to })} />
+            </>
+          )}
+          <button onClick={load} className="btn"><Search className="h-5 w-5" /> Load</button>
           <button onClick={downloadCsv} className="btn-secondary"><Download className="h-5 w-5" /> CSV</button>
           <button onClick={downloadExcel} className="btn-secondary"><FileSpreadsheet className="h-5 w-5" /> Excel</button>
         </div>
       </Panel>
-      <Panel title={reportTypes.find(([key]) => key === type)?.[1]}><DataTable rows={rows} columns={Object.keys(rows[0] || {})} /></Panel>
+
+      {type === "monthly-executive" && monthlyData && (
+        <div className="space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gradient-to-r from-paddy-800 to-paddy-900 text-white p-5 rounded-lg shadow-soft">
+            <div>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-paddy-200">Executive Statutory Business Audit</span>
+              <h2 className="text-xl font-black mt-0.5">Monthly Business Report: {targetMonth}</h2>
+              <p className="text-xs text-paddy-100">Sree Anjaneya Agro Agencies • APMC Yard Davanagere</p>
+            </div>
+            <button
+              onClick={printReport}
+              className="btn bg-white text-paddy-900 hover:bg-paddy-50 font-bold text-xs py-2 px-4 shadow flex items-center gap-2 self-start sm:self-auto"
+            >
+              <Printer className="h-4 w-4 text-paddy-700" /> Print Monthly Report
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Card 1: Current Stock */}
+            <div className="rounded-xl border border-paddy-200 bg-white p-5 shadow-soft space-y-4">
+              <div className="flex items-center justify-between border-b border-paddy-100 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="grid h-9 w-9 place-items-center rounded bg-paddy-100 text-paddy-800">
+                    <Boxes className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">Current Stock Valuation</h3>
+                    <p className="text-[11px] text-slate-500">Live godown inventory valuation</p>
+                  </div>
+                </div>
+                <span className="text-xs font-bold px-2 py-0.5 rounded bg-paddy-50 text-paddy-800 border border-paddy-200">
+                  {monthlyData.current_stock.total_skus} SKUs
+                </span>
+              </div>
+
+              <div>
+                <span className="text-xs text-slate-500 block">Inventory Value (at Purchase Cost)</span>
+                <span className="text-2xl font-black text-paddy-900">{currency.format(monthlyData.current_stock.valuation_cost)}</span>
+                <span className="text-xs text-slate-500 block mt-0.5">Selling Value: {currency.format(monthlyData.current_stock.valuation_selling)}</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs pt-1 border-t border-slate-100">
+                <div className="p-2 rounded bg-amber-50 border border-amber-100">
+                  <span className="text-amber-800 block text-[11px] font-medium">Low Stock Items</span>
+                  <span className="text-base font-bold text-amber-900">{monthlyData.current_stock.low_stock_count} Products</span>
+                </div>
+                <div className="p-2 rounded bg-orange-50 border border-orange-100">
+                  <span className="text-orange-800 block text-[11px] font-medium">Near-Expiry (90d)</span>
+                  <span className="text-base font-bold text-orange-900">{monthlyData.current_stock.expiring_count} Batches</span>
+                </div>
+              </div>
+
+              <div className="text-[11px] text-slate-600 bg-slate-50 p-2.5 rounded border border-slate-200">
+                <span className="font-semibold block text-slate-700 mb-1">Expiring Stock Risk Valuation:</span>
+                <span className="font-bold text-red-700 text-sm">{currency.format(monthlyData.current_stock.expiring_valuation)}</span>
+              </div>
+            </div>
+
+            {/* Card 2: Total Revenue */}
+            <div className="rounded-xl border border-blue-200 bg-white p-5 shadow-soft space-y-4">
+              <div className="flex items-center justify-between border-b border-blue-100 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="grid h-9 w-9 place-items-center rounded bg-blue-100 text-blue-800">
+                    <IndianRupee className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">Total Revenue</h3>
+                    <p className="text-[11px] text-slate-500">Sales turnover & GST breakdown</p>
+                  </div>
+                </div>
+                <span className="text-xs font-bold px-2 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200">
+                  {monthlyData.total_revenue.total_invoices} Bills
+                </span>
+              </div>
+
+              <div>
+                <span className="text-xs text-slate-500 block">Gross Invoiced Sales</span>
+                <span className="text-2xl font-black text-blue-900">{currency.format(monthlyData.total_revenue.gross_sales)}</span>
+                <span className="text-xs text-slate-500 block mt-0.5">Net Taxable: {currency.format(monthlyData.total_revenue.net_taxable)}</span>
+              </div>
+
+              <div className="p-2 rounded bg-slate-50 border border-slate-200 text-xs space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">CGST (50%):</span>
+                  <span className="font-semibold text-slate-800">{currency.format(monthlyData.total_revenue.cgst_total)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">SGST (50%):</span>
+                  <span className="font-semibold text-slate-800">{currency.format(monthlyData.total_revenue.sgst_total)}</span>
+                </div>
+                <div className="flex justify-between font-bold border-t border-slate-200 pt-1 text-blue-800">
+                  <span>Total Statutory Tax:</span>
+                  <span>{currency.format(monthlyData.total_revenue.cgst_total + monthlyData.total_revenue.sgst_total)}</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                <div className="p-1.5 rounded bg-slate-50 border border-slate-100">
+                  <span className="text-slate-500 block">Cash:</span>
+                  <span className="font-bold text-slate-800">{currency.format(monthlyData.total_revenue.tender_breakdown.cash)}</span>
+                </div>
+                <div className="p-1.5 rounded bg-slate-50 border border-slate-100">
+                  <span className="text-slate-500 block">UPI QR:</span>
+                  <span className="font-bold text-emerald-700">{currency.format(monthlyData.total_revenue.tender_breakdown.upi)}</span>
+                </div>
+                <div className="p-1.5 rounded bg-slate-50 border border-slate-100">
+                  <span className="text-slate-500 block">Card:</span>
+                  <span className="font-bold text-slate-800">{currency.format(monthlyData.total_revenue.tender_breakdown.card)}</span>
+                </div>
+                <div className="p-1.5 rounded bg-slate-50 border border-slate-100">
+                  <span className="text-slate-500 block">Credit (Udhaari):</span>
+                  <span className="font-bold text-amber-700">{currency.format(monthlyData.total_revenue.tender_breakdown.credit)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Card 3: Pending Payments */}
+            <div className="rounded-xl border border-red-200 bg-white p-5 shadow-soft space-y-4">
+              <div className="flex items-center justify-between border-b border-red-100 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="grid h-9 w-9 place-items-center rounded bg-red-100 text-red-800">
+                    <WalletCards className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">Pending Payments</h3>
+                    <p className="text-[11px] text-slate-500">Farmer credit & debt aging</p>
+                  </div>
+                </div>
+                <span className="text-xs font-bold px-2 py-0.5 rounded bg-red-50 text-red-800 border border-red-200">
+                  Active Khata
+                </span>
+              </div>
+
+              <div>
+                <span className="text-xs text-slate-500 block">Total Khata Receivable (Principal + Interest)</span>
+                <span className="text-2xl font-black text-red-900">{currency.format(monthlyData.pending_payments.total_receivable)}</span>
+                <span className="text-xs text-slate-500 block mt-0.5">Principal: {currency.format(monthlyData.pending_payments.principal_outstanding)} | Accrued Int: +{currency.format(monthlyData.pending_payments.accrued_interest)}</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="p-2 rounded bg-slate-50 border border-slate-200">
+                  <span className="text-slate-500 block text-[11px]">Month Credit Issued</span>
+                  <span className="text-sm font-bold text-amber-700">{currency.format(monthlyData.pending_payments.month_credit_issued)}</span>
+                </div>
+                <div className="p-2 rounded bg-slate-50 border border-slate-200">
+                  <span className="text-slate-500 block text-[11px]">Month Collections</span>
+                  <span className="text-sm font-bold text-emerald-700">{currency.format(monthlyData.pending_payments.month_credit_collected)}</span>
+                </div>
+              </div>
+
+              <div className="space-y-1 text-xs pt-1 border-t border-slate-100">
+                <span className="font-semibold block text-[11px] text-slate-700">Debt Aging Analysis:</span>
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-slate-500">Current (0-30 Days):</span>
+                  <span className="font-semibold text-emerald-700">{currency.format(monthlyData.pending_payments.aging_analysis.current_0_30d)}</span>
+                </div>
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-slate-500">Watchlist (31-60 Days):</span>
+                  <span className="font-semibold text-amber-700">{currency.format(monthlyData.pending_payments.aging_analysis.watchlist_31_60d)}</span>
+                </div>
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-slate-500">Severe Overdue (&gt;60 Days):</span>
+                  <span className="font-bold text-red-700">{currency.format(monthlyData.pending_payments.aging_analysis.severe_over_60d)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <Panel title={type === "monthly-executive" ? "Itemized Monthly Statutory Ledger Metrics" : reportTypes.find(([key]) => key === type)?.[1]}>
+        <DataTable rows={rows} columns={Object.keys(rows[0] || {})} />
+      </Panel>
     </div>
   );
 }
@@ -2872,12 +3464,51 @@ function DataTable({ rows, columns, actions, empty = "No records found." }) {
   return <div className="w-full max-h-[560px] overflow-auto custom-scrollbar rounded-md border border-slate-200"><table className="w-full text-sm min-w-[550px]"><thead className="sticky top-0 bg-paddy-50 text-left z-10"><tr>{columns.map((c) => <th key={c} className="whitespace-nowrap">{labelize(c)}</th>)}{actions && <th className="whitespace-nowrap">Action</th>}</tr></thead><tbody>{rows.map((row) => <tr key={row.id || JSON.stringify(row)} className="hover:bg-slate-50/70 transition-colors">{columns.map((c) => <td key={c} className="whitespace-nowrap">{format(row[c])}</td>)}{actions && <td className="whitespace-nowrap">{actions(row)}</td>}</tr>)}</tbody></table></div>;
 }
 
-function Input({ label, value, onChange, type = "text" }) {
-  return <label className="mt-3 block text-sm font-medium text-slate-600">{label}<input className="mt-1 h-11 w-full rounded-md border border-slate-200 px-3 text-slate-900 outline-none focus:border-paddy-500" type={type} value={value ?? ""} onChange={(e) => onChange(e.target.value)} /></label>;
+function Input({ label, value, onChange, type = "text", error, required, placeholder, disabled, min, max }) {
+  return (
+    <label className="mt-3 block text-sm font-medium text-slate-600">
+      <span className="flex items-center justify-between">
+        <span>{label} {required && <span className="text-red-500 font-bold">*</span>}</span>
+      </span>
+      <input
+        className={`mt-1 h-11 w-full rounded-md border px-3 text-slate-900 outline-none transition-colors ${
+          error ? "border-red-500 bg-red-50/40 focus:border-red-600" : "border-slate-200 focus:border-paddy-500"
+        } ${disabled ? "bg-slate-100 text-slate-500 cursor-not-allowed" : ""}`}
+        type={type}
+        value={value ?? ""}
+        placeholder={placeholder}
+        disabled={disabled}
+        min={min}
+        max={max}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {error && <p className="mt-1 text-xs text-red-600 font-medium flex items-center gap-1">⚠ {error}</p>}
+    </label>
+  );
 }
 
-function Select({ label, value, options, labels = {}, onChange }) {
-  return <label className="mt-3 block text-sm font-medium text-slate-600">{label}<select className="mt-1 h-11 w-full rounded-md border border-slate-200 px-3 text-slate-900 outline-none focus:border-paddy-500" value={value ?? ""} onChange={(e) => onChange(e.target.value)}>{options.map((option) => <option key={option} value={option}>{labels[option] || option}</option>)}</select></label>;
+function Select({ label, value, options, labels = {}, onChange, error, required }) {
+  return (
+    <label className="mt-3 block text-sm font-medium text-slate-600">
+      <span className="flex items-center justify-between">
+        <span>{label} {required && <span className="text-red-500 font-bold">*</span>}</span>
+      </span>
+      <select
+        className={`mt-1 h-11 w-full rounded-md border px-3 text-slate-900 outline-none transition-colors ${
+          error ? "border-red-500 bg-red-50/40 focus:border-red-600" : "border-slate-200 focus:border-paddy-500"
+        }`}
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {labels[option] || option}
+          </option>
+        ))}
+      </select>
+      {error && <p className="mt-1 text-xs text-red-600 font-medium flex items-center gap-1">⚠ {error}</p>}
+    </label>
+  );
 }
 
 function SearchBox({ value, setValue }) {

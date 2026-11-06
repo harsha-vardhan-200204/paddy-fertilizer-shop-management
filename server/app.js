@@ -129,16 +129,95 @@ app.post("/api/insights/settings", asyncRoute(async (req, res) => {
   res.json({ message: "Insights settings updated successfully", settings: updated });
 }));
 
+
+// ==========================================
+// FORM VALIDATION & INTEGRITY MIDDLEWARE
+// ==========================================
+function validateResourceInput(resource, body) {
+  if (!body || typeof body !== "object") return "Request payload must be a valid JSON object.";
+
+  if (resource === "products") {
+    if (!body.name || String(body.name).trim().length < 2) {
+      return "Product name is required (minimum 2 characters).";
+    }
+    if (!body.category || String(body.category).trim().length === 0) {
+      return "Product category is required.";
+    }
+    if (!body.hsn_code || !/^\d{2,8}$/.test(String(body.hsn_code).trim())) {
+      return "Statutory HSN Code must be 2 to 8 numeric digits.";
+    }
+    const pPrice = Number(body.purchase_price);
+    const sPrice = Number(body.selling_price);
+    if (isNaN(pPrice) || pPrice <= 0) {
+      return "Purchase price must be a positive number.";
+    }
+    if (isNaN(sPrice) || sPrice <= 0) {
+      return "Selling price must be a positive number.";
+    }
+    if (sPrice < pPrice) {
+      return `Selling price (₹${sPrice}) cannot be lower than purchase cost (₹${pPrice}).`;
+    }
+    if (body.alert_quantity !== undefined && Number(body.alert_quantity) < 0) {
+      return "Minimum stock alert quantity cannot be negative.";
+    }
+  }
+
+  if (resource === "customers") {
+    if (!body.name || String(body.name).trim().length < 2) {
+      return "Farmer / Customer name is required (minimum 2 characters).";
+    }
+    if (body.mobile) {
+      const cleanMobile = String(body.mobile).trim().replace(/\D/g, "");
+      if (cleanMobile.length > 0 && !/^[6-9]\d{9}$/.test(cleanMobile)) {
+        return "Customer phone number must be a valid 10-digit Indian mobile number (e.g., 9876543210).";
+      }
+    }
+    if (body.aadhaar_number) {
+      const cleanAadhaar = String(body.aadhaar_number).trim().replace(/\D/g, "");
+      if (cleanAadhaar.length > 0 && cleanAadhaar.length !== 12) {
+        return "Aadhaar number must contain exactly 12 numeric digits.";
+      }
+    }
+    if (body.credit_limit !== undefined && Number(body.credit_limit) < 0) {
+      return "Credit limit cannot be a negative amount.";
+    }
+  }
+
+  if (resource === "suppliers") {
+    if (!body.name || String(body.name).trim().length < 2) {
+      return "Supplier / Distributor company name is required.";
+    }
+    if (body.gstin) {
+      const cleanGST = String(body.gstin).trim().toUpperCase();
+      if (!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(cleanGST)) {
+        return "Invalid statutory GSTIN format. Expected 15 characters (e.g., 29ABCDE1234F1Z5).";
+      }
+    }
+    if (body.mobile) {
+      const cleanMobile = String(body.mobile).trim().replace(/\D/g, "");
+      if (cleanMobile.length > 0 && !/^[6-9]\d{9}$/.test(cleanMobile)) {
+        return "Supplier contact number must be a valid 10-digit mobile number.";
+      }
+    }
+  }
+
+  return null;
+}
+
 for (const resource of ["products", "customers", "suppliers", "farmer_credit_ledger", "credit_payments", "interest_history"]) {
   app.get(`/api/${resource}`, asyncRoute(async (req, res) => {
     res.json(await store.list(resource, req.query));
   }));
 
   app.post(`/api/${resource}`, asyncRoute(async (req, res) => {
+    const error = validateResourceInput(resource, req.body);
+    if (error) return res.status(400).json({ message: error });
     res.status(201).json(await store.create(resource, req.body, req.user));
   }));
 
   app.put(`/api/${resource}/:id`, asyncRoute(async (req, res) => {
+    const error = validateResourceInput(resource, req.body);
+    if (error) return res.status(400).json({ message: error });
     res.json(await store.update(resource, req.params.id, req.body, req.user));
   }));
 
@@ -162,6 +241,18 @@ app.get("/api/sales/:id", asyncRoute(async (req, res) => {
 }));
 
 app.post("/api/sales", asyncRoute(async (req, res) => {
+  if (!req.body.items || !Array.isArray(req.body.items) || req.body.items.length === 0) {
+    return res.status(400).json({ message: "Sale transaction requires at least 1 item line." });
+  }
+  for (const item of req.body.items) {
+    if (!item.product_id && !item.name && !item.product_name) {
+      return res.status(400).json({ message: "Each item line must have a selected product." });
+    }
+    const qty = Number(item.qty);
+    if (isNaN(qty) || qty <= 0) {
+      return res.status(400).json({ message: `Quantity for '${item.product_name || item.name || "item"}' must be greater than zero.` });
+    }
+  }
   const preview = await calculateInvoice(req.body.items || [], store);
   const sale = await store.createSale({ ...req.body, ...preview }, req.user);
   predictionEngine.checkAndTriggerRetrain(store).catch(console.error);
@@ -184,6 +275,25 @@ app.get("/api/purchases/:id", asyncRoute(async (req, res) => {
 }));
 
 app.post("/api/purchases", asyncRoute(async (req, res) => {
+  if (!req.body.supplier_id && !req.body.supplier_name) {
+    return res.status(400).json({ message: "Supplier selection is mandatory for purchase inwarding." });
+  }
+  if (!req.body.invoice_number && !req.body.invoice_no) {
+    return res.status(400).json({ message: "Wholesale Supplier Invoice Number is required." });
+  }
+  if (!req.body.items || !Array.isArray(req.body.items) || req.body.items.length === 0) {
+    return res.status(400).json({ message: "Purchase voucher must contain at least 1 item line." });
+  }
+  for (const item of req.body.items) {
+    const qty = Number(item.qty);
+    const cost = Number(item.purchase_price || item.unit_cost || item.cost);
+    if (isNaN(qty) || qty <= 0) {
+      return res.status(400).json({ message: "Inward quantity for item must be greater than zero." });
+    }
+    if (isNaN(cost) || cost <= 0) {
+      return res.status(400).json({ message: "Purchase rate for item must be greater than zero." });
+    }
+  }
   res.status(201).json(await store.createPurchase(req.body, req.user));
 }));
 
@@ -209,6 +319,13 @@ app.get(["/api/payments", "/api/farmer_payments"], asyncRoute(async (req, res) =
 }));
 
 app.post(["/api/payments", "/api/farmer_payments"], asyncRoute(async (req, res) => {
+  const amount = Number(req.body.amount || req.body.payment_amount);
+  if (isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ message: "Payment amount must be a positive number greater than 0." });
+  }
+  if (!req.body.customer_id) {
+    return res.status(400).json({ message: "Farmer / Customer selection is required to record payment." });
+  }
   const payment = await store.createPayment(req.body, req.user);
   predictionEngine.checkAndTriggerRetrain(store).catch(console.error);
   res.status(201).json(payment);
@@ -216,6 +333,211 @@ app.post(["/api/payments", "/api/farmer_payments"], asyncRoute(async (req, res) 
 
 app.get("/api/stock/logs", asyncRoute(async (req, res) => {
   res.json(await store.stockLogs(req.query));
+}));
+
+// ==========================================
+// FEATURE C: EXECUTIVE MONTHLY BUSINESS REPORT
+// Current Stock, Total Revenue, Pending Payments
+// ==========================================
+app.get("/api/reports/monthly-executive", asyncRoute(async (req, res) => {
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const targetMonth = req.query.month || currentMonth;
+
+  const products = await store.list("products");
+  const sales = await store.listSales();
+  const customers = await store.list("customers");
+  const ledger = (await store.list("farmer_credit_ledger")) || [];
+  const payments = (await store.list("payments")) || [];
+
+  // 1. Current Stock Snapshot
+  let totalStockValuationCost = 0;
+  let totalStockValuationSelling = 0;
+  let totalUnitsInGodown = 0;
+  let lowStockCount = 0;
+  let expiringIn90dCount = 0;
+  let expiringStockValuation = 0;
+
+  const categoryMap = {};
+  const now = new Date();
+
+  for (const p of products) {
+    const stock = Number(p.current_stock || 0);
+    const pCost = Number(p.purchase_price || 0);
+    const sPrice = Number(p.selling_price || 0);
+    const alertQty = Number(p.alert_quantity || 5);
+
+    if (stock > 0) {
+      totalUnitsInGodown += stock;
+      totalStockValuationCost += stock * pCost;
+      totalStockValuationSelling += stock * sPrice;
+
+      const cat = p.category || "General";
+      categoryMap[cat] = (categoryMap[cat] || 0) + (stock * pCost);
+    }
+
+    if (stock <= alertQty) {
+      lowStockCount++;
+    }
+
+    if (p.expiry_date) {
+      const exp = new Date(p.expiry_date);
+      if (!isNaN(exp.getTime())) {
+        const days = Math.ceil((exp.getTime() - now.getTime()) / 86400000);
+        if (days <= 90) {
+          expiringIn90dCount++;
+          if (stock > 0) expiringStockValuation += stock * pCost;
+        }
+      }
+    }
+  }
+
+  // 2. Total Revenue (for selected month)
+  const monthSales = sales.filter(s => {
+    const sDate = String(s.date || s.created_at || "").slice(0, 7);
+    return sDate === targetMonth && s.status !== "CANCELLED";
+  });
+
+  let totalInvoices = monthSales.length;
+  let grossRevenue = 0;
+  let netTaxable = 0;
+  let cgstTotal = 0;
+  let sgstTotal = 0;
+
+  let tenderCash = 0;
+  let tenderUPI = 0;
+  let tenderCard = 0;
+  let tenderCredit = 0;
+
+  for (const s of monthSales) {
+    const gTotal = Number(s.grand_total || 0);
+    grossRevenue += gTotal;
+    cgstTotal += Number(s.cgst || 0);
+    sgstTotal += Number(s.sgst || 0);
+    netTaxable += Number(s.subtotal || s.taxable || (gTotal - Number(s.cgst || 0) - Number(s.sgst || 0)));
+
+    const mode = String(s.payment_mode || "cash").toLowerCase();
+    if (mode === "cash") tenderCash += gTotal;
+    else if (mode === "upi") tenderUPI += gTotal;
+    else if (mode === "card") tenderCard += gTotal;
+    else if (mode === "credit" || mode === "khata") tenderCredit += gTotal;
+    else if (mode === "mixed") {
+      tenderCash += Number(s.cash_amount || 0);
+      tenderUPI += Number(s.upi_amount || 0);
+      tenderCard += Number(s.card_amount || 0);
+      tenderCredit += Number(s.credit_amount || 0);
+    }
+  }
+
+  const netRevenue = grossRevenue - (cgstTotal + sgstTotal);
+
+  // 3. Pending Payments & Debt Aging
+  let totalPendingPrincipal = 0;
+  let totalPendingInterest = 0;
+  let agingCurrent = 0;
+  let agingWatchlist = 0;
+  let agingSevere = 0;
+
+  const monthCreditSales = monthSales.filter(s => s.payment_mode === "credit" || (s.payment_mode === "mixed" && Number(s.credit_amount) > 0));
+  const monthCreditIssued = monthCreditSales.reduce((sum, s) => sum + Number(s.credit_amount || s.grand_total || 0), 0);
+
+  const monthPayments = payments.filter(p => String(p.payment_date || p.created_at || "").slice(0, 7) === targetMonth);
+  const monthCreditCollected = monthPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+
+  for (const c of customers) {
+    const bal = Number(c.pending_balance || 0);
+    if (bal <= 0) continue;
+
+    totalPendingPrincipal += bal;
+
+    const custLedger = ledger.filter(l => l.customer_id === c.id || l.farmer_id === c.id);
+    let oldestDate = null;
+    let rate = 2;
+    for (const item of custLedger) {
+      const d = item.purchase_date || item.created_at;
+      if (d && (!oldestDate || new Date(d) < new Date(oldestDate))) oldestDate = d;
+      if (item.interest_rate) rate = Number(item.interest_rate);
+    }
+    const billDate = oldestDate ? new Date(oldestDate) : new Date(now.getTime() - 25 * 86400000);
+    const days = Math.max(0, Math.floor((now.getTime() - billDate.getTime()) / 86400000));
+    const accrued = bal * (rate / 100) * (days / 30);
+    totalPendingInterest += accrued;
+
+    if (days <= 30) agingCurrent += bal;
+    else if (days <= 60) agingWatchlist += bal;
+    else agingSevere += bal;
+  }
+
+  const reportRows = [
+    { metric_group: "Current Stock", parameter: "Total Product SKUs", value: products.length, unit: "Products" },
+    { metric_group: "Current Stock", parameter: "Total Inventory Volume", value: Math.round(totalUnitsInGodown), unit: "Units / Bags" },
+    { metric_group: "Current Stock", parameter: "Stock Valuation (Purchase Cost)", value: Math.round(totalStockValuationCost), unit: "INR" },
+    { metric_group: "Current Stock", parameter: "Stock Valuation (Selling Value)", value: Math.round(totalStockValuationSelling), unit: "INR" },
+    { metric_group: "Current Stock", parameter: "Low Stock Alert Items", value: lowStockCount, unit: "Products" },
+    { metric_group: "Current Stock", parameter: "Expiring Items (within 90d)", value: expiringIn90dCount, unit: "Batches" },
+    { metric_group: "Current Stock", parameter: "Expiring Stock Value at Risk", value: Math.round(expiringStockValuation), unit: "INR" },
+    
+    { metric_group: "Monthly Revenue", parameter: `Invoices Billed (${targetMonth})`, value: totalInvoices, unit: "Invoices" },
+    { metric_group: "Monthly Revenue", parameter: "Gross Sales Revenue", value: Math.round(grossRevenue), unit: "INR" },
+    { metric_group: "Monthly Revenue", parameter: "Taxable Net Turnover", value: Math.round(netTaxable), unit: "INR" },
+    { metric_group: "Monthly Revenue", parameter: "Statutory CGST Collected", value: Math.round(cgstTotal), unit: "INR" },
+    { metric_group: "Monthly Revenue", parameter: "Statutory SGST Collected", value: Math.round(sgstTotal), unit: "INR" },
+    { metric_group: "Monthly Revenue", parameter: "Cash Tender Collections", value: Math.round(tenderCash), unit: "INR" },
+    { metric_group: "Monthly Revenue", parameter: "UPI Digital QR Collections", value: Math.round(tenderUPI), unit: "INR" },
+    { metric_group: "Monthly Revenue", parameter: "Card Tender Collections", value: Math.round(tenderCard), unit: "INR" },
+    { metric_group: "Monthly Revenue", parameter: "Khata Credit Sales Disbursed", value: Math.round(tenderCredit), unit: "INR" },
+
+    { metric_group: "Pending Payments", parameter: "Month Credit Disbursed", value: Math.round(monthCreditIssued), unit: "INR" },
+    { metric_group: "Pending Payments", parameter: "Month Credit Collected", value: Math.round(monthCreditCollected), unit: "INR" },
+    { metric_group: "Pending Payments", parameter: "Total Principal Outstanding", value: Math.round(totalPendingPrincipal), unit: "INR" },
+    { metric_group: "Pending Payments", parameter: "Total Accrued Monthly Interest", value: Math.round(totalPendingInterest), unit: "INR" },
+    { metric_group: "Pending Payments", parameter: "Total Khata Debt (Principal + Interest)", value: Math.round(totalPendingPrincipal + totalPendingInterest), unit: "INR" },
+    { metric_group: "Pending Payments", parameter: "Aging: Current (0-30 Days)", value: Math.round(agingCurrent), unit: "INR" },
+    { metric_group: "Pending Payments", parameter: "Aging: Watchlist (31-60 Days)", value: Math.round(agingWatchlist), unit: "INR" },
+    { metric_group: "Pending Payments", parameter: "Aging: Severe Risk (>60 Days Overdue)", value: Math.round(agingSevere), unit: "INR" }
+  ];
+
+  res.json({
+    month: targetMonth,
+    shop_name: "SREE ANJANEYA AGRO AGENCIES",
+    generated_at: new Date().toISOString(),
+    current_stock: {
+      total_skus: products.length,
+      total_units: Math.round(totalUnitsInGodown),
+      valuation_cost: Math.round(totalStockValuationCost),
+      valuation_selling: Math.round(totalStockValuationSelling),
+      low_stock_count: lowStockCount,
+      expiring_count: expiringIn90dCount,
+      expiring_valuation: Math.round(expiringStockValuation),
+      category_breakdown: categoryMap
+    },
+    total_revenue: {
+      total_invoices: totalInvoices,
+      gross_sales: Math.round(grossRevenue),
+      net_taxable: Math.round(netTaxable),
+      cgst_total: Math.round(cgstTotal),
+      sgst_total: Math.round(sgstTotal),
+      net_revenue: Math.round(netRevenue),
+      tender_breakdown: {
+        cash: Math.round(tenderCash),
+        upi: Math.round(tenderUPI),
+        card: Math.round(tenderCard),
+        credit: Math.round(tenderCredit)
+      }
+    },
+    pending_payments: {
+      month_credit_issued: Math.round(monthCreditIssued),
+      month_credit_collected: Math.round(monthCreditCollected),
+      principal_outstanding: Math.round(totalPendingPrincipal),
+      accrued_interest: Math.round(totalPendingInterest),
+      total_receivable: Math.round(totalPendingPrincipal + totalPendingInterest),
+      aging_analysis: {
+        current_0_30d: Math.round(agingCurrent),
+        watchlist_31_60d: Math.round(agingWatchlist),
+        severe_over_60d: Math.round(agingSevere)
+      }
+    },
+    rows: reportRows
+  });
 }));
 
 app.get("/api/reports/:type", asyncRoute(async (req, res) => {
@@ -229,6 +551,261 @@ app.get("/api/reports/:type", asyncRoute(async (req, res) => {
     return res.json({ filename: `${req.params.type}.xlsx`, content: exportExcelBase64(report.rows) });
   }
   res.json(report);
+}));
+
+// ==========================================
+// FEATURE A: EXPIRY ALERTS & NOTIFICATION DISPATCHER
+// ==========================================
+app.get("/api/alerts/expiry", asyncRoute(async (req, res) => {
+  const thresholdDays = Number(req.query.threshold || 90);
+  const products = await store.list("products");
+  const now = new Date();
+  
+  const expiringItems = [];
+  let criticalCount = 0;
+  let warningCount = 0;
+  let totalStockValueAtRisk = 0;
+
+  for (const p of products) {
+    const expDateStr = p.expiry_date || p.expiry;
+    if (!expDateStr) continue;
+    const expDate = new Date(expDateStr);
+    if (isNaN(expDate.getTime())) continue;
+
+    const diffMs = expDate.getTime() - now.getTime();
+    const daysRemaining = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+
+    if (daysRemaining <= thresholdDays) {
+      const stock = Math.max(0, Number(p.current_stock || 0));
+      const valueAtRisk = stock * Number(p.purchase_price || p.selling_price || 0);
+      totalStockValueAtRisk += valueAtRisk;
+
+      let status = "NEAR_EXPIRY";
+      let severity = "WARNING";
+      if (daysRemaining <= 0) {
+        status = "EXPIRED";
+        severity = "CRITICAL";
+        criticalCount++;
+      } else if (daysRemaining <= 30) {
+        status = "EXPIRING_CRITICAL_30D";
+        severity = "CRITICAL";
+        criticalCount++;
+      } else {
+        warningCount++;
+      }
+
+      expiringItems.push({
+        id: p.id,
+        name: p.name,
+        category: p.category,
+        brand: p.brand || "Agro standard",
+        batch_number: p.batch_number || "BATCH-DEFAULT",
+        expiry_date: expDateStr,
+        days_remaining: daysRemaining,
+        current_stock: stock,
+        unit: p.unit || "Unit",
+        purchase_price: Number(p.purchase_price || 0),
+        selling_price: Number(p.selling_price || 0),
+        value_at_risk: Math.round(valueAtRisk * 100) / 100,
+        status,
+        severity
+      });
+    }
+  }
+
+  expiringItems.sort((a, b) => a.days_remaining - b.days_remaining);
+
+  res.json({
+    threshold_days: thresholdDays,
+    summary: {
+      total_items_at_risk: expiringItems.length,
+      critical_count: criticalCount,
+      warning_count: warningCount,
+      total_stock_value_at_risk: Math.round(totalStockValueAtRisk * 100) / 100
+    },
+    items: expiringItems
+  });
+}));
+
+app.post("/api/alerts/send-expiry", asyncRoute(async (req, res) => {
+  const { recipientEmail, recipientPhone, recipientName = "Distributor / Store Manager", targetItems } = req.body;
+  const products = targetItems && targetItems.length > 0 
+    ? targetItems 
+    : (await store.list("products")).filter(p => {
+        if (!p.expiry_date) return false;
+        const days = Math.ceil((new Date(p.expiry_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+        return days <= 90;
+      });
+
+  const shopName = "SREE ANJANEYA AGRO AGENCIES";
+  const shopAddress = "APMC Yard, Davanagere, Karnataka - 577002";
+  const shopPhone = "8660548244";
+  
+  let totalLossValuation = 0;
+  const itemListText = products.map((item, idx) => {
+    const days = item.days_remaining !== undefined ? item.days_remaining : Math.ceil((new Date(item.expiry_date).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+    const stock = Number(item.current_stock || 0);
+    const val = stock * Number(item.purchase_price || item.selling_price || 0);
+    totalLossValuation += val;
+    const urgency = days <= 0 ? "EXPIRED" : `${days}d left`;
+    return `${idx + 1}. ${item.name} (Batch: ${item.batch_number || "N/A"}) - Stock: ${stock} ${item.unit || "Units"} | Exp: ${item.expiry_date} [${urgency}]`;
+  }).join("\n");
+
+  const emailSubject = `URGENT: Stock Expiry Notice - ${shopName} Davanagere`;
+  const emailBody = `Dear ${recipientName},\n\n` +
+    `This is an automated regulatory stock expiry alert generated by SmartAgro System for ${shopName}.\n\n` +
+    `STORE LOCATION: ${shopAddress}\n` +
+    `CONTACT: ${shopPhone}\n` +
+    `DATE GENERATED: ${new Date().toLocaleDateString("en-IN")}\n\n` +
+    `CRITICAL / NEAR-EXPIRY PRODUCT BATCHES:\n` +
+    `--------------------------------------------------\n` +
+    `${itemListText}\n` +
+    `--------------------------------------------------\n` +
+    `TOTAL ESTIMATED STOCK VALUATION AT RISK: Rs. ${totalLossValuation.toLocaleString("en-IN", { minimumFractionDigits: 2 })}\n\n` +
+    `RECOMMENDED REGULATORY ACTION:\n` +
+    `As per the Insecticides Act, 1968 and Fertilizer (Control) Order, 1985, degraded or expired chemical stock cannot be sold. Please process immediate return to wholesale distributor or clearance before the expiry deadline.\n\n` +
+    `Regards,\nInventory Management Team\n${shopName}`;
+
+  const whatsappMessage = `*URGENT: STOCK EXPIRY ALERT*\n` +
+    `*${shopName}*\n${shopAddress}\n\n` +
+    `Dear ${recipientName},\n` +
+    `The following agricultural chemical/fertilizer batches are near expiry or expired in our godown:\n\n` +
+    `${itemListText}\n\n` +
+    `*Total Value at Risk:* Rs. ${totalLossValuation.toLocaleString("en-IN", { minimumFractionDigits: 2 })}\n` +
+    `Kindly arrange supplier return voucher or clearance.\n` +
+    `Helpline: ${shopPhone}`;
+
+  const cleanPhone = recipientPhone ? String(recipientPhone).replace(/\D/g, "") : "";
+  const phoneParam = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
+  const whatsappUrl = `https://wa.me/${phoneParam}?text=${encodeURIComponent(whatsappMessage)}`;
+  const mailtoUrl = `mailto:${recipientEmail || ""}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+
+  res.json({
+    ok: true,
+    message: `Expiry alert prepared for ${products.length} product batches (Valuation: ₹${totalLossValuation.toFixed(2)})`,
+    emailSubject,
+    emailBody,
+    whatsappMessage,
+    whatsappUrl,
+    mailtoUrl
+  });
+}));
+
+// ==========================================
+// FEATURE B: CREDIT DUE NOTIFICATIONS & OVERDUE TRACKER
+// ==========================================
+app.get("/api/alerts/credit-dues", asyncRoute(async (req, res) => {
+  const customers = await store.list("customers");
+  const sales = await store.listSales();
+  const ledger = (await store.list("farmer_credit_ledger")) || [];
+  const now = new Date();
+
+  const overdueList = [];
+  let totalPrincipal = 0;
+  let totalAccruedInterest = 0;
+
+  for (const c of customers) {
+    const custSales = sales.filter(s => (s.customer_id === c.id || s.customer_name === c.name) && s.status !== "CANCELLED");
+    const custLedger = ledger.filter(l => l.customer_id === c.id || l.farmer_id === c.id);
+
+    let principalDues = Number(c.pending_balance || 0);
+    if (principalDues <= 0 && custLedger.length > 0) {
+      principalDues = custLedger.reduce((sum, item) => sum + Number(item.pending_balance || item.credit_amount || 0), 0);
+    }
+
+    if (principalDues <= 0) continue;
+
+    let oldestDate = null;
+    let interestRate = 2; // Default 2% per month
+    let dueDaysLimit = 30;
+
+    for (const item of custLedger) {
+      const d = item.purchase_date || item.created_at;
+      if (d && (!oldestDate || new Date(d) < new Date(oldestDate))) {
+        oldestDate = d;
+      }
+      if (item.interest_rate) interestRate = Number(item.interest_rate);
+      if (item.credit_due_days) dueDaysLimit = Number(item.credit_due_days);
+    }
+
+    if (!oldestDate) {
+      const creditSale = custSales.find(s => s.payment_mode === "credit" || s.payment_mode === "mixed");
+      if (creditSale) oldestDate = creditSale.date || creditSale.created_at;
+    }
+
+    const billDate = oldestDate ? new Date(oldestDate) : new Date(now.getTime() - 35 * 86400000);
+    const daysElapsed = Math.max(0, Math.floor((now.getTime() - billDate.getTime()) / 86400000));
+    const isOverdue = daysElapsed > dueDaysLimit;
+    const overdueDays = Math.max(0, daysElapsed - dueDaysLimit);
+
+    const accruedInterest = Math.round((principalDues * (interestRate / 100) * (daysElapsed / 30)) * 100) / 100;
+    const totalPayable = Math.round((principalDues + accruedInterest) * 100) / 100;
+
+    totalPrincipal += principalDues;
+    totalAccruedInterest += accruedInterest;
+
+    overdueList.push({
+      customer_id: c.id,
+      name: c.name,
+      mobile: c.mobile || "",
+      village: c.village || "Davanagere Rural",
+      credit_limit: Number(c.credit_limit || 0),
+      principal_dues: principalDues,
+      interest_rate_monthly: interestRate,
+      bill_date: billDate.toISOString().slice(0, 10),
+      days_elapsed: daysElapsed,
+      due_days_limit: dueDaysLimit,
+      is_overdue: isOverdue,
+      overdue_days: overdueDays,
+      accrued_interest: accruedInterest,
+      total_payable: totalPayable
+    });
+  }
+
+  overdueList.sort((a, b) => b.overdue_days - a.overdue_days);
+
+  res.json({
+    summary: {
+      total_debtors: overdueList.length,
+      overdue_count: overdueList.filter(x => x.is_overdue).length,
+      total_principal: Math.round(totalPrincipal * 100) / 100,
+      total_interest: Math.round(totalAccruedInterest * 100) / 100,
+      total_outstanding: Math.round((totalPrincipal + totalAccruedInterest) * 100) / 100
+    },
+    customers: overdueList
+  });
+}));
+
+app.post("/api/alerts/send-credit-reminder", asyncRoute(async (req, res) => {
+  const { customerId, mobile, message, reminderType = "whatsapp" } = req.body;
+  const customer = await store.getById("customers", customerId);
+  const shopName = "SREE ANJANEYA AGRO AGENCIES";
+  const upiId = "8660548244@ybl";
+  const shopPhone = "8660548244";
+
+  const customerName = customer ? customer.name : "Valued Farmer";
+  const finalMessage = message || (
+    `*PAYMENT REMINDER - ${shopName}*\n` +
+    `APMC Yard, Davanagere (Phone: ${shopPhone})\n\n` +
+    `Namaskara ${customerName} avare,\n` +
+    `This is a polite reminder regarding your pending fertilizer/agro credit balance at our shop.\n\n` +
+    `Kindly clear your balance to maintain an active credit limit for the upcoming crop season.\n\n` +
+    `*Pay via UPI:* ${upiId}\n` +
+    `*UPI Payment Link:* upi://pay?pa=${upiId}&pn=SriAnjaneyaAgro&cu=INR\n\n` +
+    `For any billing clarification, please contact: ${shopPhone}.\n` +
+    `Dhanyavadagalu!`
+  );
+
+  const cleanMobile = mobile ? String(mobile).replace(/\D/g, "") : (customer?.mobile?.replace(/\D/g, "") || "");
+  const phoneParam = cleanMobile.length === 10 ? `91${cleanMobile}` : cleanMobile;
+  const whatsappUrl = `https://wa.me/${phoneParam}?text=${encodeURIComponent(finalMessage)}`;
+
+  res.json({
+    ok: true,
+    message: `Payment reminder successfully prepared for ${customerName}`,
+    whatsappUrl,
+    reminderText: finalMessage
+  });
 }));
 
 app.get("/api/system/stats", requireAdmin, asyncRoute(async (_req, res) => {
