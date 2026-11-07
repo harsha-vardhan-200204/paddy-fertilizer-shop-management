@@ -383,3 +383,173 @@ export async function generateInvoicePdf(sale, outputPath) {
     }
   });
 }
+
+/**
+ * Generates an official Customer Credit & Account Statement PDF
+ */
+export async function generateCustomerStatementPdf(customer, { sales = [], payments = [], interestHistory = [], ledger = [] }, outputPath) {
+  await fs.promises.mkdir(path.dirname(outputPath), { recursive: true });
+
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({
+        size: "A4",
+        margin: 28,
+        info: {
+          Title: `Customer Statement - ${customer.name}`,
+          Author: "Sri Anjaneya Agro Agencies",
+          Subject: "Customer Ledger Statement"
+        }
+      });
+
+      const writeStream = fs.createWriteStream(outputPath);
+      doc.pipe(writeStream);
+
+      const PRIMARY_COLOR = "#004D25";
+      const TEXT_MAIN = "#1E293B";
+      const TEXT_MUTED = "#64748B";
+      const BORDER_COLOR = "#CBD5E1";
+      const BG_LIGHT = "#F8FAFC";
+
+      const startX = 28;
+      const pageWidth = 539;
+      let currentY = 28;
+
+      // Header
+      doc.rect(startX, currentY, pageWidth, 56).fill(PRIMARY_COLOR);
+      doc.fillColor("#FFFFFF").fontSize(16).font("Helvetica-Bold")
+        .text("SRI ANJANEYA AGRO AGENCIES", startX + 12, currentY + 10);
+      doc.fontSize(8.5).font("Helvetica")
+        .text("Shri Shiva nilaya, Hale kunduvada, Davanagere, Karnataka 577566 | GSTIN: 29ANHPM1365Q1ZA | Phone: +91 8660548244", startX + 12, currentY + 30);
+      doc.fontSize(10).font("Helvetica-Bold")
+        .text("CUSTOMER CREDIT & ACCOUNT STATEMENT", startX + 12, currentY + 42, { align: "right", width: pageWidth - 24 });
+
+      currentY += 66;
+
+      // Customer Info Box
+      doc.rect(startX, currentY, pageWidth, 50).fillAndStroke(BG_LIGHT, BORDER_COLOR);
+      doc.fillColor(PRIMARY_COLOR).fontSize(9).font("Helvetica-Bold")
+        .text("CUSTOMER INFORMATION", startX + 10, currentY + 6);
+
+      doc.fillColor(TEXT_MAIN).fontSize(8.5).font("Helvetica")
+        .text(`Name: ${customer.name || 'Valued Farmer'}`, startX + 10, currentY + 20)
+        .text(`Mobile: ${customer.mobile || 'N/A'}`, startX + 10, currentY + 32)
+        .text(`Village / Location: ${customer.village || 'Local'}`, startX + 200, currentY + 20)
+        .text(`Aadhaar: ${customer.aadhaar_number || 'N/A'}`, startX + 200, currentY + 32)
+        .text(`Statement Date: ${new Date().toLocaleDateString('en-IN')}`, startX + 370, currentY + 20)
+        .text(`Credit Limit: ₹${formatINR(customer.credit_limit || 0)}`, startX + 370, currentY + 32);
+
+      currentY += 58;
+
+      // Financial Metrics Boxes
+      const totalCreditPurchased = sales.reduce((sum, s) => sum + Number(s.grand_total || 0), 0);
+      const totalPaid = payments.reduce((sum, p) => sum + Number(p.amount || p.amount_paid || 0), 0);
+      const totalInterest = interestHistory.reduce((sum, i) => sum + Number(i.interest_amount || 0), 0);
+      const netPending = Number(customer.pending_balance || customer.credit_amount || (totalCreditPurchased + totalInterest - totalPaid));
+
+      const boxW = (pageWidth - 24) / 4;
+      const metrics = [
+        { label: "Total Purchases", val: `₹${formatINR(totalCreditPurchased)}`, color: "#1e293b" },
+        { label: "Total Paid", val: `₹${formatINR(totalPaid)}`, color: "#16a34a" },
+        { label: "Accrued Interest", val: `₹${formatINR(totalInterest)}`, color: "#d97706" },
+        { label: "Total Outstanding", val: `₹${formatINR(netPending)}`, color: netPending > 0 ? "#dc2626" : "#16a34a" }
+      ];
+
+      metrics.forEach((m, idx) => {
+        const bx = startX + idx * (boxW + 8);
+        doc.rect(bx, currentY, boxW, 40).fillAndStroke(BG_LIGHT, BORDER_COLOR);
+        doc.fillColor(TEXT_MUTED).fontSize(7).font("Helvetica-Bold")
+          .text(m.label.toUpperCase(), bx + 6, currentY + 6);
+        doc.fillColor(m.color).fontSize(10.5).font("Helvetica-Bold")
+          .text(m.val, bx + 6, currentY + 20);
+      });
+
+      currentY += 48;
+
+      // Combined Ledger Entries
+      const entries = [];
+      sales.forEach(s => entries.push({
+        date: s.date || s.created_at?.slice(0, 10),
+        desc: `Sales Invoice: ${s.invoice_number}`,
+        type: "INVOICE",
+        debit: Number(s.grand_total || 0),
+        credit: 0
+      }));
+      payments.forEach(p => entries.push({
+        date: p.payment_date || p.created_at?.slice(0, 10),
+        desc: `Payment Received (${p.payment_method || 'CASH'})${p.notes ? ' - ' + p.notes : ''}`,
+        type: "PAYMENT",
+        debit: 0,
+        credit: Number(p.amount || p.amount_paid || 0)
+      }));
+      interestHistory.forEach(i => entries.push({
+        date: i.calculation_date || i.created_at?.slice(0, 10),
+        desc: `Monthly Interest Charge (${i.year_month}) @ ${i.monthly_interest_rate}%`,
+        type: "INTEREST",
+        debit: Number(i.interest_amount || 0),
+        credit: 0
+      }));
+
+      entries.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+      // Ledger Table Header
+      doc.rect(startX, currentY, pageWidth, 18).fill(PRIMARY_COLOR);
+      doc.fillColor("#FFFFFF").fontSize(7.5).font("Helvetica-Bold")
+        .text("DATE", startX + 8, currentY + 5)
+        .text("TRANSACTION DETAILS", startX + 75, currentY + 5)
+        .text("TYPE", startX + 270, currentY + 5)
+        .text("DEBIT (₹)", startX + 340, currentY + 5, { width: 55, align: "right" })
+        .text("CREDIT (₹)", startX + 405, currentY + 5, { width: 55, align: "right" })
+        .text("RUNNING (₹)", startX + 470, currentY + 5, { width: 55, align: "right" });
+
+      currentY += 18;
+
+      let running = 0;
+      entries.slice(0, 15).forEach((item, i) => {
+        running = running + item.debit - item.credit;
+        const rowBg = i % 2 === 0 ? "#FFFFFF" : BG_LIGHT;
+        doc.rect(startX, currentY, pageWidth, 16).fillAndStroke(rowBg, BORDER_COLOR);
+
+        doc.fillColor(TEXT_MAIN).fontSize(7).font("Helvetica")
+          .text(item.date || '-', startX + 8, currentY + 4)
+          .text(item.desc.slice(0, 42), startX + 75, currentY + 4)
+          .text(item.type, startX + 270, currentY + 4)
+          .text(item.debit > 0 ? formatINR(item.debit) : "-", startX + 340, currentY + 4, { width: 55, align: "right" })
+          .text(item.credit > 0 ? formatINR(item.credit) : "-", startX + 405, currentY + 4, { width: 55, align: "right" })
+          .text(formatINR(running), startX + 470, currentY + 4, { width: 55, align: "right" });
+
+        currentY += 16;
+      });
+
+      if (entries.length === 0) {
+        doc.rect(startX, currentY, pageWidth, 20).fillAndStroke("#FFFFFF", BORDER_COLOR);
+        doc.fillColor(TEXT_MUTED).fontSize(8).font("Helvetica")
+          .text("No transactions recorded in customer ledger yet.", startX, currentY + 6, { width: pageWidth, align: "center" });
+        currentY += 20;
+      }
+
+      currentY += 15;
+
+      // Settlement Footer
+      doc.rect(startX, currentY, pageWidth, 50).fillAndStroke(BG_LIGHT, BORDER_COLOR);
+      doc.fillColor(PRIMARY_COLOR).fontSize(8).font("Helvetica-Bold")
+        .text("PAYMENT SETTLEMENT & INSTRUCTIONS", startX + 10, currentY + 6);
+      doc.fillColor(TEXT_MAIN).fontSize(7.5).font("Helvetica")
+        .text("• Instant UPI Payment: 9900389992@sbi (Junji Maruthi / Sri Anjaneya Agro Agencies)", startX + 10, currentY + 18)
+        .text("• Direct Bank Transfer / Cheque / Counter Cash accepted at Main Road, Davangere.", startX + 10, currentY + 28)
+        .text("• For queries, statement reconciliation or receipt verification, call: +91 8660548244.", startX + 10, currentY + 38);
+
+      const signX = startX + 380;
+      doc.fillColor(PRIMARY_COLOR).fontSize(7.5).font("Helvetica-Bold")
+        .text("For SRI ANJANEYA AGRO AGENCIES", signX, currentY + 6, { width: 140, align: "center" });
+      doc.fillColor(TEXT_MUTED).fontSize(6.5).font("Helvetica")
+        .text("Authorized Signatory", signX, currentY + 38, { width: 140, align: "center" });
+
+      doc.end();
+      writeStream.on("finish", () => resolve(outputPath));
+      writeStream.on("error", reject);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}

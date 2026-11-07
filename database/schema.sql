@@ -223,6 +223,80 @@ create table if not exists invoice_audit_logs (
   created_at timestamptz default now()
 );
 
+create table if not exists product_batches (
+  id uuid primary key default gen_random_uuid(),
+  product_id uuid references products(id) on delete cascade,
+  product_name text not null,
+  batch_number text not null,
+  purchase_date date default current_date,
+  mfg_date date,
+  expiry_date date not null,
+  initial_stock numeric(12,2) not null default 0,
+  current_stock numeric(12,2) not null default 0,
+  unit text not null default 'Bag',
+  purchase_price numeric(12,2) default 0,
+  selling_price numeric(12,2) default 0,
+  supplier_id uuid references suppliers(id) on delete set null,
+  supplier_name text,
+  status text not null default 'ACTIVE',
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create table if not exists interest_history (
+  id uuid primary key default gen_random_uuid(),
+  customer_id uuid references customers(id) on delete cascade,
+  customer_name text,
+  bill_number text,
+  sale_id uuid references sales(id) on delete set null,
+  year_month text not null,
+  calculation_date date not null default current_date,
+  principal_balance numeric(12,2) not null,
+  monthly_interest_rate numeric(5,2) not null,
+  calculation_type text not null default 'simple',
+  interest_amount numeric(12,2) not null,
+  accumulated_interest numeric(12,2) not null default 0,
+  total_balance_after numeric(12,2) not null,
+  status text not null default 'APPLIED',
+  note text,
+  created_at timestamptz default now()
+);
+
+create table if not exists credit_settings (
+  id text primary key default 'default',
+  interest_enabled boolean default true,
+  monthly_interest_rate numeric(5,2) default 2.0,
+  calculation_type text default 'simple',
+  grace_period_days integer default 0,
+  calculation_day integer default 1,
+  payment_allocation_policy text default 'principal_first',
+  default_credit_due_days integer default 30,
+  expiry_alerts_enabled boolean default true,
+  alert_periods text default '90,60,30,15,7,0',
+  admin_notification_email text default 'harshavardhanjunji@gmail.com',
+  admin_notification_whatsapp text default '+918660548244',
+  customer_bill_whatsapp_enabled boolean default true,
+  customer_bill_email_enabled boolean default true,
+  admin_expiry_email_enabled boolean default true,
+  admin_expiry_whatsapp_enabled boolean default true,
+  updated_at timestamptz default now()
+);
+
+create table if not exists expiry_alert_history (
+  id uuid primary key default gen_random_uuid(),
+  batch_id text not null,
+  product_name text not null,
+  batch_number text not null,
+  alert_period integer not null,
+  recipient_email text,
+  recipient_whatsapp text,
+  email_status text default 'PENDING',
+  whatsapp_status text default 'PENDING',
+  days_remaining integer not null,
+  expiry_date date not null,
+  sent_at timestamptz default now()
+);
+
 create index if not exists idx_products_search on products using gin (to_tsvector('english', coalesce(name,'') || ' ' || coalesce(brand,'') || ' ' || coalesce(product_type,'')));
 create index if not exists idx_sales_invoice on sales(invoice_number);
 create index if not exists idx_sales_date on sales(date);
@@ -230,3 +304,7 @@ create index if not exists idx_purchases_date on purchases(purchase_date);
 create index if not exists idx_stock_logs_product on stock_logs(product_id);
 create index if not exists idx_deliveries_invoice on digital_deliveries(invoice_number);
 create index if not exists idx_audit_invoice on invoice_audit_logs(invoice_number);
+create index if not exists idx_batches_expiry on product_batches(expiry_date);
+create index if not exists idx_interest_customer on interest_history(customer_id);
+create unique index if not exists idx_interest_cust_cycle on interest_history(customer_id, year_month);
+create unique index if not exists idx_expiry_alert_unique on expiry_alert_history(batch_id, alert_period);

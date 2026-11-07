@@ -150,7 +150,6 @@ function App() {
           <ErrorBoundary>
             {screen === "dashboard" && <Dashboard api={api} setScreen={setScreen} notify={setToast} />}
             {screen === "billing" && <Billing api={api} notify={setToast} />}
-            {screen === "invoices" && <InvoiceManagement api={api} notify={setToast} user={session.user} setScreen={setScreen} />}
             {screen === "products" && <Products api={api} notify={setToast} />}
             {screen === "purchases" && <Purchases api={api} notify={setToast} user={session.user} />}
             {screen === "customers" && <Customers api={api} notify={setToast} />}
@@ -159,6 +158,7 @@ function App() {
             {screen === "stock" && <Stock api={api} notify={setToast} />}
             {screen === "reports" && <Reports api={api} notify={setToast} />}
             {screen === "insights" && <BusinessInsights api={api} notify={setToast} setScreen={setScreen} />}
+            {screen === "settings" && <SystemSettings api={api} notify={setToast} user={session.user} />}
             {screen === "reset" && <BusinessReset api={api} notify={setToast} setScreen={setScreen} user={session.user} />}
           </ErrorBoundary>
         </div>
@@ -295,15 +295,15 @@ function Sidebar({ screen, setScreen, user, logout, isOpen, onClose }) {
   const items = [
     ["dashboard", LayoutDashboard, "Dashboard"],
     ["billing", ReceiptText, "Sales Billing"],
-    ["invoices", FileText, "Invoices & Delivery"],
     ["products", Boxes, "Products"],
     ["purchases", PackagePlus, "Purchases"],
     ["customers", UserRound, "Farmers"],
     ["suppliers", Truck, "Suppliers"],
     ["farmer_payments", WalletCards, "Payment Records"],
-    ["stock", AlertTriangle, "Stock"],
+    ["stock", AlertTriangle, "Stock & Expiry"],
     ["reports", FileSpreadsheet, "GST Reports"],
     ["insights", TrendingUp, "Business Insights"],
+    ...(isAdmin ? [["settings", Settings, "System Settings"]] : []),
     ...(isAdmin ? [["reset", ShieldAlert, "Business Reset"]] : [])
   ];
   return (
@@ -359,15 +359,15 @@ function Header({ screen, onToggleSidebar }) {
   const titles = {
     dashboard: "Dashboard",
     billing: "Sales Billing",
-    invoices: "GST Invoices & Digital Delivery Management",
     products: "Product Management",
     purchases: "Purchase Management",
     customers: "Farmer Records",
     suppliers: "Supplier Management",
     farmer_payments: "Payment Records",
-    stock: "Stock Management",
+    stock: "Stock & Product Expiry Safety Hub",
     reports: "GST Reports",
     insights: "Business Insights & Decision Support",
+    settings: "System Settings & Automated Schedulers",
     reset: "System Security & Business Reset"
   };
   return (
@@ -977,6 +977,8 @@ function Products({ api, notify }) {
 
 function Billing({ api, notify }) {
   const [products, setProducts] = useState([]);
+  const [batches, setBatches] = useState([]);
+  const [deliveryChannel, setDeliveryChannel] = useState("both"); // both | whatsapp | email | none
   const [customers, setCustomers] = useState([]);
   const [shop, setShop] = useState({});
   const [invoice, setInvoice] = useState(null);
@@ -991,9 +993,26 @@ function Billing({ api, notify }) {
   
   useEffect(() => {
     api.get("/products").then(setProducts);
+    api.get("/inventory/batches").then(setBatches).catch(() => setBatches([]));
     api.get("/customers").then(setCustomers);
     api.get("/shop").then(setShop);
   }, [api]);
+
+  const isProductExpired = (prod) => {
+    if (!prod) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (prod.expiry_date) {
+      const exp = new Date(prod.expiry_date);
+      exp.setHours(0, 0, 0, 0);
+      if (exp < today) return true;
+    }
+    const matchingBatches = batches.filter(b => b.product_id === prod.id);
+    if (matchingBatches.length > 0 && matchingBatches.every(b => b.expiry_date && new Date(b.expiry_date) < today)) {
+      return true;
+    }
+    return false;
+  };
 
   // // Step 1: Send OTP via UIDAI Tathya Resident Portal (https://tathya.uidai.gov.in/access/login?role=resident)
   const sendTathyaOtp = async () => {
@@ -1098,6 +1117,11 @@ function Billing({ api, notify }) {
       notify("Cart is empty! Please add at least one product item to create an invoice.");
       return;
     }
+    const expiredLine = lines.find(l => isProductExpired(l.product));
+    if (expiredLine) {
+      notify(`BLOCKED: '${expiredLine.product?.name}' has EXPIRED (${expiredLine.product?.expiry_date || "Past safety date"}). Selling expired stock is strictly prohibited by law.`);
+      return;
+    }
     for (const line of lines) {
       const q = Number(line.qty);
       if (isNaN(q) || q <= 0) {
@@ -1170,6 +1194,7 @@ function Billing({ api, notify }) {
 
     const payload = { 
       ...form,
+      delivery_channel: deliveryChannel,
       credit_days: Number(form.credit_days || 30),
       interest_rate: Number(form.interest_rate || 2),
       customer_aadhaar: form.customer_aadhaar ? form.customer_aadhaar.replace(/\D/g, "") : "", 
@@ -1254,6 +1279,46 @@ function Billing({ api, notify }) {
             <label htmlFor="interstate_sale" className="text-xs font-semibold text-slate-700 cursor-pointer">Inter-State Sale (IGST)</label>
           </div>
         </div>
+        {/* Expired Item Blocking Banner */}
+        {lines.some(l => isProductExpired(l.product)) && (
+          <div className="mt-4 p-3.5 bg-red-100 border-2 border-red-500 rounded-lg text-red-950 font-bold text-xs flex items-center gap-2.5 shadow-sm animate-pulse">
+            <AlertTriangle className="h-5 w-5 text-red-700 shrink-0" />
+            <div>
+              <p className="text-sm font-black text-red-900">EXPIRED PRODUCT IN CART: Sale of expired chemical stock is prohibited!</p>
+              <p className="text-xs text-red-800 mt-0.5">Under fertilizer and pesticide safety regulations, checkout is blocked until expired item(s) are removed.</p>
+            </div>
+          </div>
+        )}
+
+        {/* Automatic Digital Bill Delivery Selector */}
+        <div className="mt-4 p-3.5 bg-slate-50 border border-slate-200 rounded-lg">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div>
+              <span className="text-xs font-bold text-slate-800 block">Automatic Digital Bill Delivery</span>
+              <span className="text-[11px] text-slate-500 font-medium">
+                Official Gmail: <span className="font-semibold text-slate-700">harshavardhanjunji@gmail.com</span> | WhatsApp: <span className="font-semibold text-slate-700">+91 8660548244</span>
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {[
+                ["both", "Both (WhatsApp + Email)"],
+                ["whatsapp", "WhatsApp Only"],
+                ["email", "Email Only"],
+                ["none", "None (Print Only)"]
+              ].map(([ch, label]) => (
+                <button
+                  key={ch}
+                  type="button"
+                  onClick={() => setDeliveryChannel(ch)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-bold transition-all border ${deliveryChannel === ch ? "bg-paddy-700 text-white border-paddy-700 shadow-sm" : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
         <div className="mt-5 overflow-x-auto rounded-md border border-slate-200 custom-scrollbar">
           <table className="w-full text-sm">
             <thead className="bg-paddy-50 text-left">
@@ -1611,871 +1676,311 @@ function InvoicePreview({ shop, invoice, api, notify }) {
   );
 }
 
-function InvoiceManagement({ api, notify, user, setScreen }) {
+function SystemSettings({ api, notify, user }) {
   const isAdmin = user?.role === "admin" || user?.role === "owner";
-  const [sales, setSales] = useState([]);
-  const [customers, setCustomers] = useState([]);
+  const [activeTab, setActiveTab] = useState("credit"); // credit | expiry | senders | deliveries
+  const [creditSettings, setCreditSettings] = useState({
+    monthly_interest_rate: 2,
+    calculation_type: "simple",
+    grace_period_days: 30,
+    calculation_day: 1,
+    payment_allocation_policy: "principal_first"
+  });
+  const [savingCredit, setSavingCredit] = useState(false);
+  const [testEmailLoading, setTestEmailLoading] = useState(false);
+  const [testEmailResult, setTestEmailResult] = useState(null);
   const [deliveries, setDeliveries] = useState([]);
-  const [activeTab, setActiveTab] = useState("invoices"); // invoices | reminders | logs
-  const [search, setSearch] = useState("");
-  const [paymentFilter, setPaymentFilter] = useState("");
-  const [deliveryFilter, setDeliveryFilter] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [viewingInvoice, setViewingInvoice] = useState(null);
-  const [cancellingInvoice, setCancellingInvoice] = useState(null);
-  const [cancelReason, setCancelReason] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [emailModalInvoice, setEmailModalInvoice] = useState(null);
-  const [recipientEmail, setRecipientEmail] = useState("");
 
-  const loadData = () => {
-    api.get("/sales").then((data) => setSales(Array.isArray(data) ? data : [])).catch(console.error);
-    api.get("/customers").then((data) => setCustomers(Array.isArray(data) ? data : [])).catch(console.error);
-    api.get("/invoices/deliveries").then((data) => setDeliveries(Array.isArray(data) ? data : [])).catch(() => setDeliveries([]));
+  const loadSettings = () => {
+    api.get("/credit/settings").then(setCreditSettings).catch(console.error);
+    api.get("/invoices/deliveries").then(setDeliveries).catch(() => setDeliveries([]));
   };
 
   useEffect(() => {
-    loadData();
+    loadSettings();
   }, []);
 
-  const filteredSales = useMemo(() => {
-    return sales.filter((s) => {
-      const q = search.toLowerCase();
-      const matchSearch =
-        !q ||
-        String(s.invoice_number || "").toLowerCase().includes(q) ||
-        String(s.customer_name || "").toLowerCase().includes(q) ||
-        String(s.mobile || "").toLowerCase().includes(q);
-
-      const isCanc = s.status === "CANCELLED";
-      let matchPay = true;
-      if (paymentFilter === "CANCELLED") matchPay = isCanc;
-      else if (paymentFilter === "PAID") matchPay = !isCanc && (s.payment_status === "PAID" || Number(s.balance_due || 0) <= 0);
-      else if (paymentFilter === "PARTIAL") matchPay = !isCanc && (s.payment_status === "PARTIAL" || (Number(s.amount_paid || 0) > 0 && Number(s.balance_due || 0) > 0));
-      else if (paymentFilter === "CREDIT") matchPay = !isCanc && (s.payment_status === "CREDIT" || (Number(s.amount_paid || 0) === 0 && Number(s.balance_due || 0) > 0));
-
-      const matchDel =
-        !deliveryFilter ||
-        (deliveryFilter === "whatsapp_sent" && (s.whatsapp_status === "DELIVERED" || s.whatsapp_status === "SIMULATED_SENT")) ||
-        (deliveryFilter === "email_sent" && (s.email_status === "DELIVERED" || s.email_status === "SIMULATED_SENT")) ||
-        (deliveryFilter === "failed" && (s.whatsapp_status === "FAILED" || s.email_status === "FAILED"));
-
-      const sDate = s.date || (s.created_at ? s.created_at.slice(0, 10) : "");
-      const matchFrom = !dateFrom || sDate >= dateFrom;
-      const matchTo = !dateTo || sDate <= dateTo;
-
-      return matchSearch && matchPay && matchDel && matchFrom && matchTo;
-    });
-  }, [sales, search, paymentFilter, deliveryFilter, dateFrom, dateTo]);
-
-  const metrics = useMemo(() => {
-    const active = sales.filter((s) => s.status !== "CANCELLED");
-    const totalBilled = active.reduce((sum, s) => sum + Number(s.grand_total || 0), 0);
-    const totalPaid = active.reduce((sum, s) => sum + Number(s.amount_paid || 0), 0);
-    const totalDue = active.reduce((sum, s) => sum + Number(s.balance_due || 0), 0);
-    const cancelledCount = sales.filter((s) => s.status === "CANCELLED").length;
-    return {
-      totalCount: sales.length,
-      activeCount: active.length,
-      totalBilled,
-      totalPaid,
-      totalDue,
-      cancelledCount
-    };
-  }, [sales]);
-
-  const creditReminders = useMemo(() => {
-    const todayMs = Date.now();
-    return sales
-      .filter((s) => s.status !== "CANCELLED" && Number(s.balance_due || 0) > 0)
-      .map((s) => {
-        const pDate = new Date(s.date || s.created_at || Date.now());
-        const daysElapsed = Math.max(0, Math.floor((todayMs - pDate.getTime()) / 86400000));
-        const dueDays = Number(s.credit_due_days || 30);
-        const overdueDays = Math.max(0, daysElapsed - dueDays);
-        const months = daysElapsed / 30;
-        const interestRate = Number(s.interest_rate || 2);
-        const principal = Number(s.balance_due || 0);
-        const interest = Math.round(principal * (interestRate / 100) * months * 100) / 100;
-        const totalOutstanding = Math.round((principal + interest) * 100) / 100;
-
-        return {
-          sale: s,
-          customer_name: s.customer_name || "Valued Farmer",
-          mobile: s.mobile || "",
-          village: s.village || "",
-          invoice_number: s.invoice_number,
-          purchase_date: s.date || "",
-          due_date: s.due_date || new Date(pDate.getTime() + dueDays * 86400000).toISOString().slice(0, 10),
-          daysElapsed,
-          overdueDays,
-          principal,
-          interestRate,
-          interest,
-          totalOutstanding
-        };
-      })
-      .sort((a, b) => b.overdueDays - a.overdueDays);
-  }, [sales]);
-
-  const handleDownloadPdf = (sale) => {
-    const safeInv = (sale.invoice_number || `INV-${sale.id}`).replace(/[\/\\?%*:|"<>]/g, "-");
-    const link = document.createElement("a");
-    link.href = `/api/invoices/${sale.id}/pdf`;
-    link.download = `${safeInv}.pdf`;
-    link.target = "_blank";
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    notify(`Downloading GST Tax Invoice ${sale.invoice_number}...`);
-  };
-
-  const handleRetry = async (sale, channel) => {
+  const handleSaveCreditSettings = async () => {
+    setSavingCredit(true);
     try {
-      notify(`Dispatching invoice via ${channel === "whatsapp" ? "WhatsApp Cloud API" : "Email"}...`);
-      await api.post(`/invoices/${sale.id}/retry-delivery`, { channel });
-      notify(`Digital delivery sent successfully for ${sale.invoice_number}!`);
-      loadData();
+      await api.put("/credit/settings", creditSettings);
+      notify("Credit and Monthly Interest settings updated successfully!");
     } catch (err) {
-      notify("Delivery failed: " + (err.message || "Error"));
-    }
-  };
-
-  const handleSendCustomEmail = async () => {
-    if (!emailModalInvoice) return;
-    if (!recipientEmail || !recipientEmail.includes("@")) {
-      notify("Please enter a valid email address.");
-      return;
-    }
-    setLoading(true);
-    try {
-      await api.post(`/invoices/${emailModalInvoice.id}/retry-delivery`, { channel: "email", email: recipientEmail });
-      notify(`Invoice PDF successfully emailed to ${recipientEmail}!`);
-      setEmailModalInvoice(null);
-      setRecipientEmail("");
-      loadData();
-    } catch (err) {
-      notify("Email dispatch failed: " + (err.message || "Error"));
+      notify("Failed to save settings: " + err.message);
     } finally {
-      setLoading(false);
+      setSavingCredit(false);
     }
   };
 
-  const handleSendReminder = async (item) => {
+  const handleTestEmail = async () => {
+    setTestEmailLoading(true);
+    setTestEmailResult(null);
     try {
-      notify(`Sending payment reminder to ${item.customer_name}...`);
-      await api.post("/invoices/send-reminder", {
-        customer: { name: item.customer_name, mobile: item.mobile },
-        overdueDays: item.overdueDays,
-        principalAmount: item.principal,
-        accruedInterest: item.interest,
-        totalDue: item.totalOutstanding,
-        invoiceNo: item.invoice_number
-      });
-      notify(`Reminder dispatched to ${item.customer_name} (${item.mobile})!`);
-      loadData();
+      const res = await api.post("/settings/test-email", { recipient: "harshavardhanjunji@gmail.com" });
+      setTestEmailResult(res);
+      notify(res.message || "Test email dispatched to harshavardhanjunji@gmail.com!");
     } catch (err) {
-      notify("Reminder failed: " + (err.message || "Error"));
-    }
-  };
-
-  const handleConfirmCancel = async () => {
-    if (!cancellingInvoice) return;
-    if (!cancelReason.trim()) {
-      notify("Please provide a reason for cancelling this GST invoice.");
-      return;
-    }
-    setLoading(true);
-    try {
-      await api.post(`/invoices/${cancellingInvoice.id}/cancel`, { reason: cancelReason.trim() });
-      notify(`Invoice ${cancellingInvoice.invoice_number} cancelled. Stock restored and credit ledger reversed.`);
-      setCancellingInvoice(null);
-      setCancelReason("");
-      loadData();
-    } catch (err) {
-      notify("Cancellation failed: " + (err.message || "Error"));
+      setTestEmailResult({ success: false, message: err.message });
+      notify("Test email failed: " + err.message);
     } finally {
-      setLoading(false);
+      setTestEmailLoading(false);
     }
   };
 
   return (
     <div className="space-y-6">
-      {/* Top Banner & Action */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-            <FileText className="h-6 w-6 text-paddy-700" />
-            Automatic GST Invoices & Digital Delivery Management
-          </h2>
-          <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Compliant CBIC Sequential Numbering (SAG/YYYY-YY/NNN), Meta WhatsApp Cloud API & Nodemailer SMTP Delivery.
-          </p>
-        </div>
-        <button
-          onClick={() => setScreen("billing")}
-          className="btn bg-paddy-700 hover:bg-paddy-800 text-white flex items-center gap-2 text-sm shadow-sm shrink-0"
-        >
-          <ReceiptText className="h-4 w-4" /> Create New GST Sale
-        </button>
-      </div>
-
-      {/* Metric Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Invoices Issued</p>
-          <p className="text-2xl font-black text-slate-900 mt-1">{metrics.activeCount}</p>
-          <p className="text-xs text-slate-400 mt-1">{metrics.cancelledCount} cancelled</p>
-        </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Sales Billed</p>
-          <p className="text-2xl font-black text-paddy-800 mt-1">{currency.format(metrics.totalBilled)}</p>
-          <p className="text-xs text-emerald-600 font-medium mt-1">GST Tax Included</p>
-        </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Amount Collected</p>
-          <p className="text-2xl font-black text-emerald-700 mt-1">{currency.format(metrics.totalPaid)}</p>
-          <p className="text-xs text-slate-400 mt-1">Cash, UPI & Card settlements</p>
-        </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Credit Outstanding</p>
-          <p className="text-2xl font-black text-amber-700 mt-1">{currency.format(metrics.totalDue)}</p>
-          <p className="text-xs text-amber-600 font-medium mt-1">{creditReminders.length} credit accounts</p>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+        <div className="flex gap-2 sm:gap-4 flex-wrap">
+          <button
+            onClick={() => setActiveTab("credit")}
+            className={`px-4 py-2 font-bold transition-all ${activeTab === "credit" ? "text-paddy-700 border-b-2 border-paddy-700 bg-paddy-50/50" : "text-slate-500 hover:text-slate-800"}`}
+          >
+            Credit and Interest Policy
+          </button>
+          <button
+            onClick={() => setActiveTab("expiry")}
+            className={`px-4 py-2 font-bold transition-all ${activeTab === "expiry" ? "text-paddy-700 border-b-2 border-paddy-700 bg-paddy-50/50" : "text-slate-500 hover:text-slate-800"}`}
+          >
+            Expiry Alert Intervals
+          </button>
+          <button
+            onClick={() => setActiveTab("senders")}
+            className={`px-4 py-2 font-bold transition-all ${activeTab === "senders" ? "text-paddy-700 border-b-2 border-paddy-700 bg-paddy-50/50" : "text-slate-500 hover:text-slate-800"}`}
+          >
+            Official Senders and SMTP
+          </button>
+          <button
+            onClick={() => setActiveTab("deliveries")}
+            className={`px-4 py-2 font-bold transition-all ${activeTab === "deliveries" ? "text-paddy-700 border-b-2 border-paddy-700 bg-paddy-50/50" : "text-slate-500 hover:text-slate-800"}`}
+          >
+            Digital Delivery Logs ({deliveries.length})
+          </button>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex border-b border-slate-200 bg-white px-4 rounded-t-xl">
-        <button
-          onClick={() => setActiveTab("invoices")}
-          className={`py-3.5 px-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${
-            activeTab === "invoices"
-              ? "border-paddy-700 text-paddy-800"
-              : "border-transparent text-slate-500 hover:text-slate-800"
-          }`}
-        >
-          <ReceiptText className="h-4 w-4" /> All GST Invoices ({filteredSales.length})
-        </button>
-        <button
-          onClick={() => setActiveTab("reminders")}
-          className={`py-3.5 px-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${
-            activeTab === "reminders"
-              ? "border-amber-600 text-amber-800"
-              : "border-transparent text-slate-500 hover:text-slate-800"
-          }`}
-        >
-          <Bell className="h-4 w-4" /> Payment Reminders ({creditReminders.length})
-        </button>
-        <button
-          onClick={() => setActiveTab("logs")}
-          className={`py-3.5 px-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${
-            activeTab === "logs"
-              ? "border-paddy-700 text-paddy-800"
-              : "border-transparent text-slate-500 hover:text-slate-800"
-          }`}
-        >
-          <Clock className="h-4 w-4" /> Delivery Logs & Audit Trail ({deliveries.length})
-        </button>
-      </div>
-
-      {/* TAB 1: ALL INVOICES */}
-      {activeTab === "invoices" && (
-        <div className="space-y-4">
-          {/* Filter Bar */}
-          <div className="bg-white p-4 rounded-b-xl border border-t-0 border-slate-200 shadow-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
-            <div>
-              <label className="text-xs font-bold text-slate-600 mb-1 block">Search Invoices</label>
-              <div className="flex h-10 items-center gap-2 rounded-md border border-slate-200 px-3 bg-white">
-                <Search className="h-4 w-4 text-slate-400 shrink-0" />
+      {activeTab === "credit" && (
+        <Panel title="Customer Credit and Monthly Interest Policy">
+          <div className="max-w-2xl space-y-4">
+            <p className="text-xs text-slate-500 leading-relaxed">
+              Configure how Udhaari interest calculates on outstanding balances. The background scheduler runs automatically on the 1st of every month in Asia/Kolkata timezone.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Monthly Interest Rate (%)</label>
                 <input
-                  className="outline-none w-full text-xs"
-                  placeholder="Invoice No, Farmer, Mobile"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  className="w-full h-10 px-3 rounded-md border border-slate-300 font-semibold text-slate-800"
+                  value={creditSettings.monthly_interest_rate}
+                  onChange={e => setCreditSettings({ ...creditSettings, monthly_interest_rate: parseFloat(e.target.value) || 0 })}
                 />
+                <span className="text-[11px] text-slate-500">Admin configurable (not hardcoded to 2%)</span>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Interest Calculation Formula</label>
+                <select
+                  className="w-full h-10 px-3 rounded-md border border-slate-300 font-semibold bg-white text-slate-800"
+                  value={creditSettings.calculation_type}
+                  onChange={e => setCreditSettings({ ...creditSettings, calculation_type: e.target.value })}
+                >
+                  <option value="simple">Simple Interest (Principal x Rate %)</option>
+                  <option value="compound">Monthly Compound Interest (Principal + Accrued x Rate %)</option>
+                </select>
+                <span className="text-[11px] text-slate-500">Simple interest or monthly compounded</span>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Grace Period (Days)</label>
+                <input
+                  type="number"
+                  min="0"
+                  className="w-full h-10 px-3 rounded-md border border-slate-300 font-semibold text-slate-800"
+                  value={creditSettings.grace_period_days}
+                  onChange={e => setCreditSettings({ ...creditSettings, grace_period_days: parseInt(e.target.value, 10) || 0 })}
+                />
+                <span className="text-[11px] text-slate-500">Bills within grace period incur 0 interest</span>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Calculation Day of Month</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="28"
+                  className="w-full h-10 px-3 rounded-md border border-slate-300 font-semibold text-slate-800"
+                  value={creditSettings.calculation_day}
+                  onChange={e => setCreditSettings({ ...creditSettings, calculation_day: parseInt(e.target.value, 10) || 1 })}
+                />
+                <span className="text-[11px] text-slate-500">Day 1 runs on the 1st of every month</span>
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="text-xs font-bold text-slate-700 block mb-1">Payment Allocation Policy</label>
+                <select
+                  className="w-full h-10 px-3 rounded-md border border-slate-300 font-semibold bg-white text-slate-800"
+                  value={creditSettings.payment_allocation_policy}
+                  onChange={e => setCreditSettings({ ...creditSettings, payment_allocation_policy: e.target.value })}
+                >
+                  <option value="principal_first">Principal First (Reduces interest-bearing principal immediately)</option>
+                  <option value="interest_first">Interest First (Clears accumulated interest before reducing principal)</option>
+                </select>
               </div>
             </div>
-            <div>
-              <label className="text-xs font-bold text-slate-600 mb-1 block">Payment Status</label>
-              <select
-                className="h-10 w-full rounded-md border border-slate-200 px-3 text-xs outline-none bg-white"
-                value={paymentFilter}
-                onChange={(e) => setPaymentFilter(e.target.value)}
+
+            <div className="pt-4 border-t border-slate-200 flex justify-end">
+              <button
+                disabled={savingCredit}
+                onClick={handleSaveCreditSettings}
+                className="btn bg-paddy-700 hover:bg-paddy-800 text-white font-bold flex items-center gap-2 py-2.5 px-6 shadow-sm"
               >
-                <option value="">All Payment Statuses</option>
-                <option value="PAID">Fully Paid</option>
-                <option value="PARTIAL">Partially Paid</option>
-                <option value="CREDIT">Credit (Udhaari)</option>
-                <option value="CANCELLED">Cancelled Invoices</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-bold text-slate-600 mb-1 block">Digital Delivery</label>
-              <select
-                className="h-10 w-full rounded-md border border-slate-200 px-3 text-xs outline-none bg-white"
-                value={deliveryFilter}
-                onChange={(e) => setDeliveryFilter(e.target.value)}
-              >
-                <option value="">All Delivery Statuses</option>
-                <option value="whatsapp_sent">WhatsApp Dispatched</option>
-                <option value="email_sent">Email Dispatched</option>
-                <option value="failed">Delivery Failed</option>
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-bold text-slate-600 mb-1 block">From Date</label>
-              <input
-                type="date"
-                className="h-10 w-full rounded-md border border-slate-200 px-3 text-xs outline-none bg-white"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-              />
-            </div>
-            <div>
-              <label className="text-xs font-bold text-slate-600 mb-1 block">To Date</label>
-              <input
-                type="date"
-                className="h-10 w-full rounded-md border border-slate-200 px-3 text-xs outline-none bg-white"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-              />
-            </div>
-          </div>
-
-          {/* Invoices Table */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-left">
-                  <tr>
-                    <th className="py-3 px-3">Invoice No</th>
-                    <th className="py-3 px-3">Date</th>
-                    <th className="py-3 px-3">Customer / Farmer</th>
-                    <th className="py-3 px-3 text-right">Grand Total</th>
-                    <th className="py-3 px-3 text-right">Paid / Balance</th>
-                    <th className="py-3 px-3 text-center">Payment</th>
-                    <th className="py-3 px-3 text-center">Digital Delivery</th>
-                    <th className="py-3 px-3 text-center">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredSales.length === 0 ? (
-                    <tr>
-                      <td colSpan={8} className="py-10 text-center text-slate-400">
-                        No GST invoices found matching your filters.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredSales.map((sale) => {
-                      const isCancelled = sale.status === "CANCELLED";
-                      const bal = Number(sale.balance_due || 0);
-                      const paid = Number(sale.amount_paid || 0);
-
-                      return (
-                        <tr
-                          key={sale.id}
-                          className={`hover:bg-slate-50/80 transition-colors ${
-                            isCancelled ? "bg-slate-50/60 opacity-70" : ""
-                          }`}
-                        >
-                          <td className="py-3 px-3 font-mono font-bold">
-                            <span className={isCancelled ? "line-through text-slate-400" : "text-paddy-900"}>
-                              {sale.invoice_number}
-                            </span>
-                            {isCancelled && (
-                              <span className="ml-1.5 inline-block text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold">
-                                VOID
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-3 text-slate-600 whitespace-nowrap">
-                            {sale.date || (sale.created_at ? sale.created_at.slice(0, 10) : "-")}
-                          </td>
-                          <td className="py-3 px-3">
-                            <p className="font-semibold text-slate-800">{sale.customer_name || "Walk-in"}</p>
-                            <p className="text-[11px] text-slate-500">{sale.mobile || "-"}</p>
-                          </td>
-                          <td className="py-3 px-3 text-right font-bold text-slate-900">
-                            {currency.format(sale.grand_total || 0)}
-                          </td>
-                          <td className="py-3 px-3 text-right whitespace-nowrap">
-                            <span className="text-emerald-700 font-semibold">{currency.format(paid)}</span>
-                            {bal > 0 && (
-                              <span className="text-red-600 font-semibold block text-[11px]">
-                                Due: {currency.format(bal)}
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-3 text-center">
-                            {isCancelled ? (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-700">
-                                Cancelled
-                              </span>
-                            ) : bal <= 0 ? (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                                Fully Paid
-                              </span>
-                            ) : paid > 0 ? (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
-                                Partial Due
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-800">
-                                Credit (Udhaari)
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-3 text-center">
-                            <div className="flex items-center justify-center gap-1.5">
-                              {/* WhatsApp badge */}
-                              <span
-                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                                  sale.whatsapp_status === "DELIVERED"
-                                    ? "bg-emerald-100 text-emerald-800"
-                                    : sale.whatsapp_status === "SIMULATED_SENT"
-                                    ? "bg-sky-100 text-sky-800"
-                                    : sale.whatsapp_status === "FAILED"
-                                    ? "bg-red-100 text-red-700"
-                                    : "bg-slate-100 text-slate-600"
-                                }`}
-                                title={`WhatsApp: ${sale.whatsapp_status || "Pending"}`}
-                              >
-                                <MessageSquare className="h-3 w-3" />
-                                {sale.whatsapp_status === "DELIVERED" ? "Sent" : sale.whatsapp_status === "SIMULATED_SENT" ? "Demo" : "WA"}
-                              </span>
-                              {/* Email badge */}
-                              <span
-                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                                  sale.email_status === "DELIVERED"
-                                    ? "bg-emerald-100 text-emerald-800"
-                                    : sale.email_status === "SIMULATED_SENT"
-                                    ? "bg-sky-100 text-sky-800"
-                                    : sale.email_status === "FAILED"
-                                    ? "bg-red-100 text-red-700"
-                                    : "bg-slate-100 text-slate-600"
-                                }`}
-                                title={`Email: ${sale.email_status || "Pending"}`}
-                              >
-                                <Mail className="h-3 w-3" />
-                                {sale.email_status === "DELIVERED" ? "Sent" : sale.email_status === "SIMULATED_SENT" ? "Demo" : "Email"}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="py-3 px-3 text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              {/* Download PDF */}
-                              <button
-                                onClick={() => handleDownloadPdf(sale)}
-                                className="p-1 rounded bg-slate-100 hover:bg-paddy-100 text-slate-700 hover:text-paddy-800"
-                                title="Download Official A4 GST PDF"
-                              >
-                                <Download className="h-3.5 w-3.5" />
-                              </button>
-                              {/* View / Print */}
-                              <button
-                                onClick={() => setViewingInvoice(sale)}
-                                className="p-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700"
-                                title="View / Print Invoice"
-                              >
-                                <Eye className="h-3.5 w-3.5" />
-                              </button>
-                              {/* Resend WhatsApp */}
-                              <button
-                                onClick={() => handleRetry(sale, "whatsapp")}
-                                className="p-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700"
-                                title="Resend WhatsApp Invoice"
-                              >
-                                <MessageSquare className="h-3.5 w-3.5" />
-                              </button>
-                              {/* Send / Resend Email */}
-                              <button
-                                onClick={() => {
-                                  setEmailModalInvoice(sale);
-                                  setRecipientEmail(sale.customer_email || sale.email || "");
-                                }}
-                                className="p-1 rounded bg-sky-50 hover:bg-sky-100 text-sky-700"
-                                title="Email PDF Invoice"
-                              >
-                                <Mail className="h-3.5 w-3.5" />
-                              </button>
-                              {/* Cancel Invoice */}
-                              {isAdmin && !isCancelled && (
-                                <button
-                                  onClick={() => {
-                                    setCancellingInvoice(sale);
-                                    setCancelReason("");
-                                  }}
-                                  className="p-1 rounded bg-red-50 hover:bg-red-100 text-red-600"
-                                  title="Cancel GST Invoice (Audit Required)"
-                                >
-                                  <Ban className="h-3.5 w-3.5" />
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 2: PAYMENT REMINDERS */}
-      {activeTab === "reminders" && (
-        <div className="space-y-4">
-          <div className="bg-amber-50 p-4 rounded-xl border border-amber-200 flex items-start gap-3">
-            <Bell className="h-5 w-5 text-amber-700 mt-0.5 shrink-0" />
-            <div className="text-xs text-amber-950">
-              <p className="font-bold text-sm text-amber-900">Automated Khata Credit Reminders</p>
-              <p className="mt-0.5">
-                Displays farmers with outstanding product balances. Interest is calculated @ <strong>2% per month</strong> from the original purchase date. One-click reminder dispatches an approved WhatsApp notification.
-              </p>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-left">
-                  <tr>
-                    <th className="py-3 px-3">Farmer Name</th>
-                    <th className="py-3 px-3">Mobile / Village</th>
-                    <th className="py-3 px-3">Invoice Ref</th>
-                    <th className="py-3 px-3">Purchase Date</th>
-                    <th className="py-3 px-3">Due Date</th>
-                    <th className="py-3 px-3 text-right">Principal Due</th>
-                    <th className="py-3 px-3 text-right">Accrued Interest</th>
-                    <th className="py-3 px-3 text-right">Total Outstanding</th>
-                    <th className="py-3 px-3 text-center">Status</th>
-                    <th className="py-3 px-3 text-center">Quick Dispatch</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {creditReminders.length === 0 ? (
-                    <tr>
-                      <td colSpan={10} className="py-10 text-center text-slate-400">
-                        🎉 Excellent! All customer credit accounts are fully cleared. No overdue balances.
-                      </td>
-                    </tr>
-                  ) : (
-                    creditReminders.map((item, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                        <td className="py-3 px-3 font-bold text-slate-900">{item.customer_name}</td>
-                        <td className="py-3 px-3 text-slate-600">
-                          <p>{item.mobile || "-"}</p>
-                          <p className="text-[11px] text-slate-400">{item.village || ""}</p>
-                        </td>
-                        <td className="py-3 px-3 font-mono font-bold text-paddy-800">{item.invoice_number}</td>
-                        <td className="py-3 px-3 text-slate-600">{item.purchase_date}</td>
-                        <td className="py-3 px-3 text-slate-600">{item.due_date}</td>
-                        <td className="py-3 px-3 text-right font-bold text-slate-800">
-                          {currency.format(item.principal)}
-                        </td>
-                        <td className="py-3 px-3 text-right text-amber-700 font-semibold">
-                          +{currency.format(item.interest)}
-                          <span className="block text-[10px] text-slate-400">({item.daysElapsed}d @ 2%/mo)</span>
-                        </td>
-                        <td className="py-3 px-3 text-right font-black text-red-600 text-sm">
-                          {currency.format(item.totalOutstanding)}
-                        </td>
-                        <td className="py-3 px-3 text-center">
-                          {item.overdueDays > 0 ? (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-800">
-                              {item.overdueDays}d Overdue
-                            </span>
-                          ) : (
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
-                              Due Soon
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              onClick={() => handleSendReminder(item)}
-                              className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-semibold flex items-center gap-1 shadow-sm"
-                              title="Send automated reminder via Meta Cloud API"
-                            >
-                              <MessageSquare className="h-3 w-3" /> Remind
-                            </button>
-                            {item.mobile && (
-                              <button
-                                onClick={() => {
-                                  const phone = item.mobile.replace(/\D/g, "");
-                                  const cleanPhone = phone.length === 10 ? `91${phone}` : phone;
-                                  const text = `Namaskara ${item.customer_name} avare, friendly reminder from SRI ANJANEYA AGRO AGENCIES. Pending credit invoice ${item.invoice_number}: Principal ₹${item.principal.toFixed(2)}, Accrued Interest ₹${item.interest.toFixed(2)}, Total Due ₹${item.totalOutstanding.toFixed(2)}. UPI: 9900389992@sbi. Helpline: 9900389992.`;
-                                  window.open(`https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`, "_blank");
-                                }}
-                                className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium"
-                                title="Open WhatsApp Web directly"
-                              >
-                                Web
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 3: DIGITAL DELIVERY LOGS & AUDIT TRAIL */}
-      {activeTab === "logs" && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-          <div className="p-4 border-b border-slate-200 flex justify-between items-center">
-            <h3 className="font-bold text-slate-800 flex items-center gap-2">
-              <Clock className="h-5 w-5 text-paddy-700" /> Digital Invoice Dispatches & System Audit Logs
-            </h3>
-            <button onClick={loadData} className="icon-btn" title="Refresh Logs">
-              <RefreshCw className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-left">
-                <tr>
-                  <th className="py-3 px-3">Timestamp</th>
-                  <th className="py-3 px-3">Invoice Number</th>
-                  <th className="py-3 px-3">Channel</th>
-                  <th className="py-3 px-3">Recipient</th>
-                  <th className="py-3 px-3 text-center">Status</th>
-                  <th className="py-3 px-3">Delivery Notes / Details</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {deliveries.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="py-10 text-center text-slate-400">
-                      No digital delivery logs recorded yet. Create an invoice to initiate dispatches.
-                    </td>
-                  </tr>
-                ) : (
-                  deliveries.map((d) => (
-                    <tr key={d.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="py-3 px-3 text-slate-600 whitespace-nowrap">
-                        {d.created_at ? new Date(d.created_at).toLocaleString("en-IN") : "-"}
-                      </td>
-                      <td className="py-3 px-3 font-mono font-bold text-paddy-900">{d.invoice_number}</td>
-                      <td className="py-3 px-3 capitalize font-semibold text-slate-700">
-                        {d.channel?.replace("_", " ")}
-                      </td>
-                      <td className="py-3 px-3 text-slate-600 font-mono">{d.recipient}</td>
-                      <td className="py-3 px-3 text-center">
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            d.status === "DELIVERED"
-                              ? "bg-emerald-100 text-emerald-800"
-                              : d.status === "SIMULATED_SENT"
-                              ? "bg-sky-100 text-sky-800"
-                              : d.status === "FAILED"
-                              ? "bg-red-100 text-red-800"
-                              : "bg-slate-100 text-slate-700"
-                          }`}
-                        >
-                          {d.status}
-                        </span>
-                      </td>
-                      <td className="py-3 px-3 text-slate-500 max-w-xs truncate">
-                        {d.details || d.error_message || d.message_id || "Dispatched"}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* VIEW / PRINT INVOICE MODAL */}
-      {viewingInvoice && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar">
-            <div className="flex justify-between items-center pb-4 border-b border-slate-200">
-              <h3 className="font-bold text-lg text-slate-800">
-                GST Invoice Receipt – {viewingInvoice.invoice_number}
-              </h3>
-              <button onClick={() => setViewingInvoice(null)} className="icon-btn">
-                <X className="h-5 w-5" />
+                <Save className="h-4 w-4" /> {savingCredit ? "Saving..." : "Save Credit Settings"}
               </button>
             </div>
+          </div>
+        </Panel>
+      )}
 
-            <div className="my-5 p-5 border border-slate-200 rounded-xl bg-slate-50/50 space-y-4">
-              <div className="text-center">
-                <h4 className="font-black text-lg text-paddy-900">SRI ANJANEYA AGRO AGENCIES</h4>
-                <p className="text-xs text-slate-600">Main Road, Davangere, Karnataka - 577002</p>
-                <p className="text-xs text-slate-600">GSTIN: 29ANHPM1365Q1ZA | Phone: 9900389992</p>
-                <span className="inline-block mt-1 text-[11px] font-bold bg-paddy-100 text-paddy-800 px-2 py-0.5 rounded">
-                  TAX INVOICE (ORIGINAL FOR RECIPIENT)
-                </span>
+      {activeTab === "expiry" && (
+        <Panel title="Product Expiry Alert Intervals and Background Scheduler">
+          <div className="max-w-2xl space-y-4">
+            <p className="text-xs text-slate-500 leading-relaxed">
+              The automated daily background scanner runs every day at 8:00 AM (Asia/Kolkata) using node-cron. It checks all product batches and sends alerts to the shop owner at the designated milestone intervals.
+            </p>
+            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 space-y-2">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">Configured Notification Thresholds</h4>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <div className="p-3 bg-white rounded border border-slate-200">
+                  <span className="text-xs font-bold text-slate-700 block">90 Days Alert</span>
+                  <span className="text-[11px] text-slate-500">Early watchlist notice</span>
+                </div>
+                <div className="p-3 bg-white rounded border border-slate-200">
+                  <span className="text-xs font-bold text-amber-700 block">60 Days Alert</span>
+                  <span className="text-[11px] text-slate-500">Discount/Push notice</span>
+                </div>
+                <div className="p-3 bg-white rounded border border-slate-200">
+                  <span className="text-xs font-bold text-orange-700 block">30 Days Alert</span>
+                  <span className="text-[11px] text-slate-500">High priority warning</span>
+                </div>
+                <div className="p-3 bg-white rounded border border-slate-200">
+                  <span className="text-xs font-bold text-red-600 block">15 Days Alert</span>
+                  <span className="text-[11px] text-slate-500">Urgent liquidation</span>
+                </div>
+                <div className="p-3 bg-white rounded border border-slate-200">
+                  <span className="text-xs font-bold text-red-700 block">7 Days Alert</span>
+                  <span className="text-[11px] text-slate-500">Final sale clearance</span>
+                </div>
+                <div className="p-3 bg-white rounded border border-red-300 bg-red-50">
+                  <span className="text-xs font-bold text-red-800 block">0 Days (Expired)</span>
+                  <span className="text-[11px] text-red-700 font-semibold">Strict billing block</span>
+                </div>
+              </div>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 p-4 rounded-lg text-xs text-amber-900 space-y-1">
+              <p className="font-bold flex items-center gap-1.5"><ShieldAlert className="h-4 w-4 text-amber-700" /> Statutory Chemical Compliance</p>
+              <p>Products reaching 0 days (past expiry date) are automatically flagged in the database and strictly blocked from counter checkout in Sales Billing.</p>
+            </div>
+          </div>
+        </Panel>
+      )}
+
+      {activeTab === "senders" && (
+        <Panel title="Shop Owner Sender Configuration and SMTP Verification">
+          <div className="max-w-2xl space-y-4">
+            <p className="text-xs text-slate-500 leading-relaxed">
+              SmartAgro uses official shop owner credentials for dispatching bills, monthly interest statements, payment reminders, and expiry alerts.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-lg space-y-1">
+                <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider block">Official WhatsApp Sender</span>
+                <p className="text-lg font-black text-emerald-950">+91 8660548244</p>
+                <p className="text-xs text-emerald-700">Meta WhatsApp Cloud API / Sandbox gateway configured</p>
               </div>
 
-              <div className="grid grid-cols-2 text-xs border-y border-slate-200 py-3 gap-2">
+              <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-1">
+                <span className="text-[11px] font-bold text-blue-800 uppercase tracking-wider block">Official Gmail Sender</span>
+                <p className="text-lg font-black text-blue-950">harshavardhanjunji@gmail.com</p>
+                <p className="text-xs text-blue-700">Nodemailer SMTP with TLS port 587 configured</p>
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-200 space-y-3">
+              <div className="flex items-center justify-between">
                 <div>
-                  <p><span className="text-slate-500">Invoice:</span> <strong>{viewingInvoice.invoice_number}</strong></p>
-                  <p><span className="text-slate-500">Date:</span> {viewingInvoice.date}</p>
-                  <p><span className="text-slate-500">Payment:</span> {(viewingInvoice.payment_method || "Cash").toUpperCase()}</p>
+                  <h4 className="text-sm font-bold text-slate-800">Verify SMTP Email Connection</h4>
+                  <p className="text-xs text-slate-500">Send an automated test email to harshavardhanjunji@gmail.com to verify outgoing mail server</p>
                 </div>
-                <div>
-                  <p><span className="text-slate-500">Customer:</span> <strong>{viewingInvoice.customer_name || "Walk-in"}</strong></p>
-                  <p><span className="text-slate-500">Mobile:</span> {viewingInvoice.mobile || "-"}</p>
-                  <p><span className="text-slate-500">Place of Supply:</span> {viewingInvoice.is_interstate ? "Inter-State" : "Karnataka (29)"}</p>
-                </div>
+                <button
+                  disabled={testEmailLoading}
+                  onClick={handleTestEmail}
+                  className="btn bg-blue-600 hover:bg-blue-700 text-white font-bold flex items-center gap-1.5 py-2 px-4 text-xs"
+                >
+                  <Mail className="h-4 w-4" /> {testEmailLoading ? "Verifying..." : "Send Test Email"}
+                </button>
               </div>
 
+              {testEmailResult && (
+                <div className={`p-3.5 rounded-lg border text-xs font-semibold ${testEmailResult.success ? "bg-emerald-50 border-emerald-300 text-emerald-800" : "bg-red-50 border-red-300 text-red-800"}`}>
+                  <p className="font-bold">{testEmailResult.success ? "✓ SMTP Connection Successful" : "⚠ SMTP Verification Notice"}</p>
+                  <p className="mt-0.5">{testEmailResult.message || JSON.stringify(testEmailResult)}</p>
+                  {testEmailResult.simulation && (
+                    <p className="mt-1 text-[11px] opacity-80">Simulation mode active: To send live emails, supply GMAIL_APP_PASSWORD in backend/.env</p>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </Panel>
+      )}
+
+      {activeTab === "deliveries" && (
+        <Panel title="Digital Delivery Audit Ledger" actions={
+          <button onClick={loadSettings} className="btn-secondary text-xs flex items-center gap-1 py-1 px-3">
+            <RefreshCw className="h-3 w-3" /> Refresh
+          </button>
+        }>
+          {!deliveries.length ? (
+            <p className="p-6 text-center text-sm text-slate-500 bg-slate-50 rounded-lg">No digital bills dispatched yet. Bills generated with WhatsApp or Email enabled will appear here.</p>
+          ) : (
+            <div className="overflow-x-auto rounded border border-slate-200">
               <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-slate-300 text-left">
-                    <th className="py-1">Item</th>
-                    <th className="py-1 text-right">Qty</th>
-                    <th className="py-1 text-right">Rate</th>
-                    <th className="py-1 text-center">Tax %</th>
-                    <th className="py-1 text-right">Total</th>
+                <thead className="bg-paddy-50 text-left font-bold">
+                  <tr>
+                    <th className="p-2.5">Date and Time</th>
+                    <th className="p-2.5">Invoice / Ref</th>
+                    <th className="p-2.5">Channel</th>
+                    <th className="p-2.5">Recipient</th>
+                    <th className="p-2.5">Status</th>
+                    <th className="p-2.5">Message ID / Details</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {(viewingInvoice.items || []).map((it, i) => (
-                    <tr key={i}>
-                      <td className="py-1.5 font-medium">{it.product_name || it.name}</td>
-                      <td className="py-1.5 text-right">{it.qty} {it.unit || "Bag"}</td>
-                      <td className="py-1.5 text-right">{currency.format(it.rate)}</td>
-                      <td className="py-1.5 text-center">{it.gst_percent || 0}%</td>
-                      <td className="py-1.5 text-right font-bold">{currency.format(it.total)}</td>
+                <tbody className="divide-y divide-slate-200">
+                  {deliveries.slice().reverse().map((d, i) => (
+                    <tr key={d.id || i} className="hover:bg-slate-50">
+                      <td className="p-2.5 text-slate-600">{d.sent_at || d.created_at || "Recent"}</td>
+                      <td className="p-2.5 font-mono font-bold text-paddy-800">{d.invoice_number || d.sale_id || "INV"}</td>
+                      <td className="p-2.5 uppercase font-semibold text-slate-700">{d.channel}</td>
+                      <td className="p-2.5 font-mono text-slate-800">{d.recipient}</td>
+                      <td className="p-2.5">
+                        <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
+                          d.status === "sent" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+                        }`}>
+                          {d.status || "SENT"}
+                        </span>
+                      </td>
+                      <td className="p-2.5 font-mono text-slate-500 truncate max-w-xs">{d.message_id || d.error || "-"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-
-              <div className="border-t border-slate-200 pt-3 flex justify-between items-center text-sm">
-                <div>
-                  <p className="text-xs text-slate-500">Paid: {currency.format(viewingInvoice.amount_paid || 0)}</p>
-                  {Number(viewingInvoice.balance_due || 0) > 0 && (
-                    <p className="text-xs text-red-600 font-bold">Balance Due: {currency.format(viewingInvoice.balance_due)}</p>
-                  )}
-                </div>
-                <div className="text-right">
-                  <span className="text-xs text-slate-500 block">Grand Total</span>
-                  <span className="text-lg font-black text-paddy-900">{currency.format(viewingInvoice.grand_total || 0)}</span>
-                </div>
-              </div>
             </div>
-
-            <div className="flex justify-end gap-3 pt-2">
-              <button onClick={() => handleDownloadPdf(viewingInvoice)} className="btn bg-paddy-700 hover:bg-paddy-800 text-white flex items-center gap-1.5 text-xs py-2">
-                <Download className="h-4 w-4" /> Download Official A4 PDF
-              </button>
-              <button onClick={() => window.print()} className="btn-secondary flex items-center gap-1.5 text-xs py-2">
-                <Printer className="h-4 w-4" /> Print Thermal
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* CANCEL INVOICE MODAL */}
-      {cancellingInvoice && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl">
-            <div className="flex items-center gap-3 text-red-600 pb-3 border-b border-slate-200">
-              <AlertTriangle className="h-6 w-6 shrink-0" />
-              <h3 className="font-bold text-lg text-slate-900">Cancel GST Invoice</h3>
-            </div>
-            <div className="my-4 space-y-3 text-xs text-slate-600">
-              <p>
-                You are about to cancel Invoice <strong>{cancellingInvoice.invoice_number}</strong> issued to <strong>{cancellingInvoice.customer_name || "Customer"}</strong>.
-              </p>
-              <div className="bg-red-50 p-3 rounded-lg border border-red-200 text-red-900 space-y-1">
-                <p className="font-bold">Audit Impact:</p>
-                <p>• Inventory stock quantities will be restored automatically.</p>
-                <p>• Customer pending credit will be reversed.</p>
-                <p>• Per CBIC rules, this invoice number will be marked as CANCELLED and will never be reused.</p>
-              </div>
-              <Input
-                label="Cancellation Reason (Mandatory)"
-                placeholder="e.g. Defective batch returned, Customer billing error"
-                value={cancelReason}
-                onChange={setCancelReason}
-                required
-              />
-            </div>
-            <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
-              <button
-                onClick={() => setCancellingInvoice(null)}
-                className="btn-secondary text-xs py-2"
-                disabled={loading}
-              >
-                Go Back
-              </button>
-              <button
-                onClick={handleConfirmCancel}
-                disabled={loading || !cancelReason.trim()}
-                className="btn bg-red-600 hover:bg-red-700 text-white text-xs py-2 font-bold shadow-sm"
-              >
-                {loading ? "Cancelling..." : "Confirm Invoice Cancellation"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* EMAIL DISPATCH MODAL */}
-      {emailModalInvoice && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-              <h3 className="font-bold text-slate-900 flex items-center gap-2">
-                <Mail className="h-5 w-5 text-sky-600" /> Email PDF Invoice
-              </h3>
-              <button onClick={() => setEmailModalInvoice(null)} className="icon-btn">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="my-4 space-y-3 text-xs">
-              <p className="text-slate-600">
-                Send official GST Tax Invoice <strong>{emailModalInvoice.invoice_number}</strong> with PDF attachment directly to farmer's inbox.
-              </p>
-              <Input
-                label="Recipient Email Address"
-                placeholder="farmer@example.com"
-                value={recipientEmail}
-                onChange={setRecipientEmail}
-                required
-              />
-            </div>
-            <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
-              <button
-                onClick={() => setEmailModalInvoice(null)}
-                className="btn-secondary text-xs py-2"
-                disabled={loading}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSendCustomEmail}
-                disabled={loading || !recipientEmail.includes("@")}
-                className="btn bg-sky-600 hover:bg-sky-700 text-white text-xs py-2 font-bold flex items-center gap-1.5 shadow-sm"
-              >
-                <Send className="h-3.5 w-3.5" />
-                {loading ? "Sending..." : "Dispatch Email Invoice"}
-              </button>
-            </div>
-          </div>
-        </div>
+          )}
+        </Panel>
       )}
     </div>
   );
 }
-
 function Purchases({ api, notify, user }) {
   const isAdmin = user?.role === "admin" || user?.role === "owner";
   const [products, setProducts] = useState([]);
@@ -3299,6 +2804,75 @@ function FarmerPayments({ api, notify }) {
     date: new Date().toISOString().slice(0, 10),
     notes: ""
   });
+  const [reminderSending, setReminderSending] = useState(false);
+  const [resendingBillId, setResendingBillId] = useState(null);
+  const [interestLoading, setInterestLoading] = useState(false);
+  const [historyModalCustomer, setHistoryModalCustomer] = useState(null);
+  const [customerInterestHistory, setCustomerInterestHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const handleCalculateInterest = async () => {
+    setInterestLoading(true);
+    try {
+      const res = await api.post("/credit/calculate-interest", {});
+      notify(res.message || `Monthly interest calculation completed: ${res.records_processed || 0} customer(s) processed.`);
+      load();
+    } catch (err) {
+      notify("Interest calculation error: " + err.message);
+    } finally {
+      setInterestLoading(false);
+    }
+  };
+
+  const openInterestHistory = async (cust) => {
+    setHistoryModalCustomer(cust);
+    setHistoryLoading(true);
+    try {
+      const list = await api.get(`/credit/interest-history/${cust.id}`);
+      setCustomerInterestHistory(list || []);
+    } catch (err) {
+      notify("Failed to load interest history: " + err.message);
+      setCustomerInterestHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const handleSendReminderViaSystem = async (channel) => {
+    if (!reminderCustomer) return;
+    setReminderSending(true);
+    try {
+      const payload = {
+        customer: reminderCustomer,
+        overdueDays: reminderCustomer.summary?.breakdown?.[0]?.daysElapsed || 0,
+        principalAmount: reminderCustomer.summary?.principal || 0,
+        accruedInterest: reminderCustomer.summary?.accruedInterest || 0,
+        totalDue: reminderCustomer.summary?.totalOutstanding || 0,
+        invoiceNo: reminderCustomer.summary?.breakdown?.[0]?.invoice_id || "UDHAARI-DUE",
+        channel: channel,
+        email: reminderCustomer.email || ""
+      };
+      const res = await api.post("/credit/send-reminder", payload);
+      notify(`Reminder dispatched! WhatsApp: ${res.whatsapp?.status || "sent"}, Email: ${res.email?.status || "sent"}`);
+    } catch (err) {
+      notify("Failed to dispatch reminder: " + err.message);
+    } finally {
+      setReminderSending(false);
+    }
+  };
+
+  const handleResendBill = async (sale, channel = "both") => {
+    if (!sale) return;
+    setResendingBillId(sale.id);
+    try {
+      const res = await api.post(`/sales/${sale.id}/resend-bill`, { channel });
+      notify(`Bill #${sale.invoice_number || sale.id} sent via ${channel.toUpperCase()}! WA: ${res.results?.whatsapp?.status || "sent"}, Email: ${res.results?.email?.status || "sent"}`);
+    } catch (err) {
+      notify("Failed to resend bill: " + err.message);
+    } finally {
+      setResendingBillId(null);
+    }
+  };
 
   const load = () => {
     api.get("/payments").then(setPayments);
@@ -3496,10 +3070,18 @@ function FarmerPayments({ api, notify }) {
         </div>
         <div className="flex gap-2 sm:gap-3 flex-wrap">
           <button 
-            onClick={() => openAddCreditForCustomer(customers[0])}
-            className="btn bg-amber-600 hover:bg-amber-700 text-white font-bold flex items-center gap-1.5 shadow-sm"
+            onClick={handleCalculateInterest}
+            disabled={interestLoading}
+            className="btn bg-indigo-700 hover:bg-indigo-800 text-white font-bold flex items-center gap-1.5 shadow-sm text-xs sm:text-sm py-2 px-3"
+            title="Calculate monthly interest for active credit balances"
           >
-            <Plus className="h-5 w-5" /> Add Customer Credit
+            <Clock className="h-4 w-4" /> {interestLoading ? "Calculating..." : "Run Monthly Interest"}
+          </button>
+          <button 
+            onClick={() => openAddCreditForCustomer(customers[0])}
+            className="btn bg-amber-600 hover:bg-amber-700 text-white font-bold flex items-center gap-1.5 shadow-sm text-xs sm:text-sm py-2 px-3"
+          >
+            <Plus className="h-4 w-4" /> Add Customer Credit
           </button>
           <button 
             onClick={() => {
@@ -3589,9 +3171,26 @@ function FarmerPayments({ api, notify }) {
                           </span>
                         </td>
                         <td>
-                          {cust && (
-                            <button className="link text-xs font-bold" onClick={() => setLedgerCustomer(cust)}>View Ledger</button>
-                          )}
+                          <div className="flex items-center gap-2">
+                            {cust && (
+                              <button className="link text-xs font-bold" onClick={() => setLedgerCustomer(cust)}>View Ledger</button>
+                            )}
+                            {(() => {
+                              const refNo = p.bill_number || p.invoice_id;
+                              const matchingSale = sales.find(s => s.invoice_number === refNo || s.id === (p.sale_id || refNo));
+                              if (!matchingSale) return null;
+                              return (
+                                <button
+                                  disabled={resendingBillId === matchingSale.id}
+                                  onClick={() => handleResendBill(matchingSale)}
+                                  className="btn-secondary text-[11px] py-0.5 px-2 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-300 font-bold flex items-center gap-1 shadow-xs"
+                                  title="Resend official GST Bill via WhatsApp and Email"
+                                >
+                                  <Send className="h-2.5 w-2.5" /> {resendingBillId === matchingSale.id ? "Sending..." : "Resend Bill"}
+                                </button>
+                              );
+                            })()}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -3660,7 +3259,7 @@ function FarmerPayments({ api, notify }) {
                           </span>
                         </td>
                         <td className="py-3 px-3 text-right">
-                          <div className="flex gap-2 items-center justify-end flex-wrap">
+                          <div className="flex gap-1.5 items-center justify-end flex-wrap">
                             {!isCleared ? (
                               <>
                                 <button 
@@ -3672,7 +3271,7 @@ function FarmerPayments({ api, notify }) {
                                 <button 
                                   onClick={() => openReminderModal(c, summary)} 
                                   className="btn-secondary text-xs py-1 px-2.5 bg-emerald-700 text-white font-bold hover:bg-emerald-800 flex items-center gap-1 shadow-sm"
-                                  title="Send payment reminder on WhatsApp"
+                                  title="Send payment reminder on WhatsApp and Email"
                                 >
                                   <Bell className="h-3 w-3" /> Remind
                                 </button>
@@ -3685,6 +3284,20 @@ function FarmerPayments({ api, notify }) {
                                 + Give Credit
                               </button>
                             )}
+                            <button 
+                              onClick={() => window.open(`/api/credit/statements/${c.id}`, "_blank")}
+                              className="btn-secondary text-xs py-1 px-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex items-center gap-1 border border-slate-300 shadow-xs"
+                              title="Download Official Account Statement PDF"
+                            >
+                              <FileText className="h-3 w-3 text-slate-500" /> Statement
+                            </button>
+                            <button 
+                              onClick={() => openInterestHistory(c)}
+                              className="btn-secondary text-xs py-1 px-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-bold flex items-center gap-1 shadow-xs"
+                              title="View Monthly Interest Accrual History"
+                            >
+                              <Clock className="h-3 w-3" /> Interest
+                            </button>
                             <button className="link text-xs font-bold" onClick={() => setLedgerCustomer({ ...c, creditSummary: summary })}>
                               View Ledger
                             </button>
@@ -3999,28 +3612,57 @@ function FarmerPayments({ api, notify }) {
               </div>
             </div>
 
-            <div className="flex gap-2 pt-2 border-t border-slate-200">
-              <button
-                onClick={() => {
-                  const cleanPhone = String(reminderCustomer.mobile || "").replace(/\D/g, "");
-                  const phoneWithCountry = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
-                  window.open(`https://api.whatsapp.com/send?phone=${phoneWithCountry}&text=${encodeURIComponent(reminderCustomer.message)}`, "_blank");
-                }}
-                className="btn flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center justify-center gap-1.5 py-2.5 text-sm"
-              >
-                <Send className="h-4 w-4" /> Send on WhatsApp
-              </button>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(reminderCustomer.message);
-                  setReminderCopied(true);
-                  setTimeout(() => setReminderCopied(false), 2000);
-                }}
-                className="btn-secondary px-3.5 py-2.5 text-xs font-bold flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300"
-              >
-                {reminderCopied ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
-                {reminderCopied ? "Copied!" : "Copy"}
-              </button>
+            <div className="flex flex-col gap-2 pt-2 border-t border-slate-200">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  disabled={reminderSending}
+                  onClick={() => handleSendReminderViaSystem("both")}
+                  className="btn bg-paddy-700 hover:bg-paddy-800 text-white font-bold flex items-center justify-center gap-1 py-2 text-xs disabled:opacity-50"
+                  title="Auto-dispatch via WhatsApp and Gmail"
+                >
+                  <Send className="h-3.5 w-3.5" /> {reminderSending ? "Sending..." : "Send Both (WA + Email)"}
+                </button>
+                <button
+                  disabled={reminderSending}
+                  onClick={() => handleSendReminderViaSystem("whatsapp")}
+                  className="btn bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center justify-center gap-1 py-2 text-xs disabled:opacity-50"
+                  title="Send via official WhatsApp (+91 8660548244)"
+                >
+                  <Send className="h-3.5 w-3.5" /> WhatsApp Only
+                </button>
+                <button
+                  disabled={reminderSending}
+                  onClick={() => handleSendReminderViaSystem("email")}
+                  className="btn bg-blue-600 hover:bg-blue-700 text-white font-bold flex items-center justify-center gap-1 py-2 text-xs disabled:opacity-50"
+                  title="Send via harshavardhanjunji@gmail.com"
+                >
+                  <Mail className="h-3.5 w-3.5" /> Email Only
+                </button>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    const cleanPhone = String(reminderCustomer.mobile || "").replace(/\D/g, "");
+                    const phoneWithCountry = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
+                    window.open(`https://api.whatsapp.com/send?phone=${phoneWithCountry}&text=${encodeURIComponent(reminderCustomer.message)}`, "_blank");
+                  }}
+                  className="btn-secondary flex-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold flex items-center justify-center gap-1.5 py-2 text-xs"
+                >
+                  <Send className="h-3.5 w-3.5" /> Open WhatsApp Web
+                </button>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(reminderCustomer.message);
+                    setReminderCopied(true);
+                    setTimeout(() => setReminderCopied(false), 2000);
+                  }}
+                  className="btn-secondary px-3.5 py-2 text-xs font-bold flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300"
+                >
+                  {reminderCopied ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-4 w-4" />}
+                  {reminderCopied ? "Copied!" : "Copy"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -4155,6 +3797,88 @@ function FarmerPayments({ api, notify }) {
           </div>
         );
       })()}
+
+      {/* Monthly Interest History Modal */}
+      {historyModalCustomer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl p-6 space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-9 w-9 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-800">
+                  <Clock className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-800">Monthly Interest Ledger</h2>
+                  <p className="text-xs text-slate-500">
+                    Farmer: <span className="font-semibold text-slate-800">{historyModalCustomer.name}</span> (Mobile: {historyModalCustomer.mobile || "-"})
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setHistoryModalCustomer(null)} className="p-1 hover:bg-slate-100 rounded-full">
+                <X className="h-5 w-5 text-slate-500" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto pr-1 flex-1 space-y-3">
+              {historyLoading ? (
+                <p className="p-8 text-center text-sm text-slate-500">Loading interest calculation history...</p>
+              ) : !customerInterestHistory.length ? (
+                <div className="p-8 text-center bg-slate-50 rounded-lg border border-slate-200">
+                  <Clock className="h-8 w-8 mx-auto text-slate-400 mb-2" />
+                  <p className="text-sm font-semibold text-slate-700">No Monthly Interest Records Found</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Monthly interest calculates on the 1st of each month via background scheduler or by clicking "Run Monthly Interest".
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded border border-slate-200">
+                  <table className="w-full text-xs">
+                    <thead className="bg-indigo-50/70 text-left font-bold text-indigo-950">
+                      <tr>
+                        <th className="p-2.5">Cycle</th>
+                        <th className="p-2.5">Calculation Date</th>
+                        <th className="p-2.5">Principal</th>
+                        <th className="p-2.5">Rate %</th>
+                        <th className="p-2.5">Type</th>
+                        <th className="p-2.5">Interest Charged</th>
+                        <th className="p-2.5">New Balance</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {customerInterestHistory.map(h => (
+                        <tr key={h.id} className="hover:bg-slate-50">
+                          <td className="p-2.5 font-mono font-bold text-indigo-900">{h.cycle_month}</td>
+                          <td className="p-2.5 text-slate-600">{h.calculation_date || h.created_at?.slice(0, 10)}</td>
+                          <td className="p-2.5 font-semibold">{currency.format(Number(h.principal_amount || 0))}</td>
+                          <td className="p-2.5">{h.interest_rate}%</td>
+                          <td className="p-2.5 capitalize">{h.calculation_type || "Simple"}</td>
+                          <td className="p-2.5 font-bold text-amber-800">+{currency.format(Number(h.interest_amount || 0))}</td>
+                          <td className="p-2.5 font-black text-slate-800">{currency.format(Number(h.new_balance || 0))}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-between items-center pt-3 border-t border-slate-200">
+              <button
+                onClick={() => window.open(`/api/credit/statements/${historyModalCustomer.id}`, "_blank")}
+                className="btn-secondary text-xs py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex items-center gap-1.5"
+              >
+                <FileText className="h-4 w-4 text-slate-500" /> Download Full Statement (PDF)
+              </button>
+              <button
+                onClick={() => setHistoryModalCustomer(null)}
+                className="btn bg-slate-800 hover:bg-slate-900 text-white font-bold py-2 px-4 text-xs"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -4162,37 +3886,510 @@ function FarmerPayments({ api, notify }) {
 
 function Stock({ api, notify }) {
   const [products, setProducts] = useState([]);
+  const [batches, setBatches] = useState([]);
   const [logs, setLogs] = useState([]);
+  const [activeTab, setActiveTab] = useState("batches"); // batches | adjust | logs
+  const [statusFilter, setStatusFilter] = useState("ALL");
+  const [search, setSearch] = useState("");
+  const [scanning, setScanning] = useState(false);
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [editingBatch, setEditingBatch] = useState(null);
+  const [batchForm, setBatchForm] = useState({
+    product_id: "",
+    product_name: "",
+    batch_number: "",
+    purchase_date: new Date().toISOString().slice(0, 10),
+    mfg_date: "",
+    expiry_date: "",
+    current_stock: "",
+    unit: "Bag",
+    purchase_price: "",
+    selling_price: "",
+    supplier_name: ""
+  });
   const [adjust, setAdjust] = useState({ product_id: "", qty: 0, type: "adjustment", note: "" });
-  const load = () => { api.get("/products").then(setProducts); api.get("/stock/logs").then(setLogs); };
-  useEffect(() => void load(), []);
-  async function save() {
+
+  const loadData = () => {
+    api.get("/products").then(setProducts).catch(console.error);
+    api.get("/inventory/batches").then(setBatches).catch(console.error);
+    api.get("/stock/logs").then(setLogs).catch(console.error);
+  };
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const handleAdjustStock = async () => {
+    if (!adjust.product_id) return notify("Please select a product");
     await api.post(`/products/${adjust.product_id}/adjust-stock`, adjust);
-    notify("Stock adjusted");
-    setTimeout(() => notify(""), 2200);
-    load();
-  }
-  const expiring = products.filter((p) => p.expiry_date && new Date(p.expiry_date) < new Date(Date.now() + 1000 * 60 * 60 * 24 * 90));
+    notify("Stock adjusted successfully");
+    setAdjust({ product_id: "", qty: 0, type: "adjustment", note: "" });
+    loadData();
+  };
+
+  const handleRunExpiryScan = async () => {
+    setScanning(true);
+    try {
+      const res = await api.post("/inventory/check-expiry", { force: true });
+      notify(`Expiry Scan Complete: ${res.alerts_dispatched || 0} alert(s) dispatched to harshavardhanjunji@gmail.com and +91 8660548244.`);
+      loadData();
+    } catch (err) {
+      notify("Scan failed: " + err.message);
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const openAddBatch = () => {
+    setEditingBatch(null);
+    setBatchForm({
+      product_id: products[0]?.id || "",
+      product_name: products[0]?.name || "",
+      batch_number: `BCH-${Date.now().toString().slice(-6)}`,
+      purchase_date: new Date().toISOString().slice(0, 10),
+      mfg_date: new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10),
+      expiry_date: new Date(Date.now() + 180 * 86400000).toISOString().slice(0, 10),
+      current_stock: "50",
+      unit: products[0]?.unit || "Bag",
+      purchase_price: products[0]?.purchase_price || "",
+      selling_price: products[0]?.selling_price || "",
+      supplier_name: products[0]?.supplier_name || "IFFCO Agro"
+    });
+    setBatchModalOpen(true);
+  };
+
+  const openEditBatch = (b) => {
+    setEditingBatch(b);
+    setBatchForm({
+      product_id: b.product_id,
+      product_name: b.product_name,
+      batch_number: b.batch_number,
+      purchase_date: b.purchase_date || "",
+      mfg_date: b.mfg_date || "",
+      expiry_date: b.expiry_date || "",
+      current_stock: String(b.current_stock ?? 0),
+      unit: b.unit || "Bag",
+      purchase_price: String(b.purchase_price ?? ""),
+      selling_price: String(b.selling_price ?? ""),
+      supplier_name: b.supplier_name || ""
+    });
+    setBatchModalOpen(true);
+  };
+
+  const handleSaveBatch = async () => {
+    if (!batchForm.product_id || !batchForm.batch_number || !batchForm.expiry_date) {
+      notify("Please fill all required fields (Product, Batch No, Expiry Date).");
+      return;
+    }
+    try {
+      const selectedProd = products.find(p => p.id === batchForm.product_id);
+      const payload = {
+        ...batchForm,
+        product_name: selectedProd?.name || batchForm.product_name,
+        current_stock: Number(batchForm.current_stock || 0),
+        purchase_price: Number(batchForm.purchase_price || 0),
+        selling_price: Number(batchForm.selling_price || 0)
+      };
+      if (editingBatch) {
+        await api.put(`/inventory/batches/${editingBatch.id}`, payload);
+        notify("Batch details updated successfully.");
+      } else {
+        await api.post("/inventory/batches", payload);
+        notify("New product batch registered into inventory.");
+      }
+      setBatchModalOpen(false);
+      loadData();
+    } catch (err) {
+      notify("Failed to save batch: " + err.message);
+    }
+  };
+
+  const handleDeleteBatch = async (batchId) => {
+    if (!window.confirm("Are you sure you want to remove this batch record?")) return;
+    try {
+      await api.delete(`/inventory/batches/${batchId}`);
+      notify("Batch deleted from inventory.");
+      loadData();
+    } catch (err) {
+      notify("Failed to delete batch: " + err.message);
+    }
+  };
+
+  // Shelf-life calculation
+  const stats = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    let safe = 0;
+    let exp60_90 = 0;
+    let exp30_60 = 0;
+    let expUnder30 = 0;
+    let expired = 0;
+
+    batches.forEach(b => {
+      if (!b.expiry_date) return;
+      const exp = new Date(b.expiry_date);
+      exp.setHours(0, 0, 0, 0);
+      const days = Math.round((exp - today) / 86400000);
+      if (days < 0) expired++;
+      else if (days <= 30) expUnder30++;
+      else if (days <= 60) exp30_60++;
+      else if (days <= 90) exp60_90++;
+      else safe++;
+    });
+
+    return { total: batches.length, safe, exp60_90, exp30_60, expUnder30, expired };
+  }, [batches]);
+
+  const filteredBatches = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return batches.filter(b => {
+      const q = search.toLowerCase();
+      const matchSearch = !q ||
+        (b.product_name && b.product_name.toLowerCase().includes(q)) ||
+        (b.batch_number && b.batch_number.toLowerCase().includes(q)) ||
+        (b.supplier_name && b.supplier_name.toLowerCase().includes(q));
+
+      if (!matchSearch) return false;
+
+      if (!b.expiry_date) return statusFilter === "ALL";
+      const exp = new Date(b.expiry_date);
+      exp.setHours(0, 0, 0, 0);
+      const days = Math.round((exp - today) / 86400000);
+
+      if (statusFilter === "EXPIRED") return days < 0;
+      if (statusFilter === "CRITICAL") return days >= 0 && days <= 30;
+      if (statusFilter === "ORANGE") return days > 30 && days <= 60;
+      if (statusFilter === "YELLOW") return days > 60 && days <= 90;
+      if (statusFilter === "SAFE") return days > 90;
+      return true;
+    });
+  }, [batches, search, statusFilter]);
+
   return (
     <div className="space-y-6">
-      <Panel title="Stock Adjustment">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <Select label="Product" value={adjust.product_id} options={["", ...products.map((p) => p.id)]} labels={{ "": "Select product", ...Object.fromEntries(products.map((p) => [p.id, p.name])) }} onChange={(product_id) => setAdjust({ ...adjust, product_id })} />
-          <Input label="Qty (+ inward / - outward)" type="number" value={adjust.qty} onChange={(qty) => setAdjust({ ...adjust, qty })} />
-          <Select label="Type" value={adjust.type} options={["adjustment", "damage", "return", "opening"]} onChange={(type) => setAdjust({ ...adjust, type })} />
-          <Input label="Note" value={adjust.note} onChange={(note) => setAdjust({ ...adjust, note })} />
-        </div>
-        <button onClick={save} className="btn mt-4"><Save className="h-5 w-5" /> Save Adjustment</button>
-      </Panel>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Panel title="Current Stock"><DataTable rows={products} columns={["name", "batch_number", "current_stock", "minimum_stock_alert", "unit", "expiry_date"]} /></Panel>
-        <Panel title="Expiry Alerts"><DataTable rows={expiring} columns={["name", "batch_number", "current_stock", "expiry_date"]} empty="No upcoming expiry alerts." /></Panel>
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-3">
+        <Mini label="Total Batches" value={stats.total} />
+        <Mini label="Safe (>90d)" value={stats.safe} />
+        <Mini label="Watchlist (60-90d)" value={stats.exp60_90} />
+        <Mini label="Action Req (30-60d)" value={stats.exp30_60} />
+        <Mini label="Critical (<=30d)" value={stats.expUnder30} />
+        <Mini label="Expired (BLOCKED)" value={stats.expired} />
       </div>
-      <Panel title="Stock Movement Logs"><DataTable rows={logs} columns={["product_name", "type", "qty", "note", "created_by", "created_at"]} /></Panel>
+
+      {/* Top Action Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setActiveTab("batches")}
+            className={`px-4 py-2 font-bold transition-all ${activeTab === "batches" ? "text-paddy-700 border-b-2 border-paddy-700 bg-paddy-50/50" : "text-slate-500 hover:text-slate-800"}`}
+          >
+            Batch Expiry Safety Hub
+          </button>
+          <button
+            onClick={() => setActiveTab("adjust")}
+            className={`px-4 py-2 font-bold transition-all ${activeTab === "adjust" ? "text-paddy-700 border-b-2 border-paddy-700 bg-paddy-50/50" : "text-slate-500 hover:text-slate-800"}`}
+          >
+            Stock Adjustment
+          </button>
+          <button
+            onClick={() => setActiveTab("logs")}
+            className={`px-4 py-2 font-bold transition-all ${activeTab === "logs" ? "text-paddy-700 border-b-2 border-paddy-700 bg-paddy-50/50" : "text-slate-500 hover:text-slate-800"}`}
+          >
+            Movement Logs ({logs.length})
+          </button>
+        </div>
+
+        <div className="flex gap-2 flex-wrap">
+          <button
+            disabled={scanning}
+            onClick={handleRunExpiryScan}
+            className="btn bg-amber-600 hover:bg-amber-700 text-white font-bold flex items-center gap-1.5 shadow-sm text-xs sm:text-sm py-2 px-3"
+            title="Scan batches now and dispatch alerts to shop owner"
+          >
+            <Bell className="h-4 w-4" /> {scanning ? "Scanning..." : "Run Expiry Scan Now"}
+          </button>
+          <button
+            onClick={openAddBatch}
+            className="btn bg-paddy-700 hover:bg-paddy-800 text-white font-bold flex items-center gap-1.5 shadow-sm text-xs sm:text-sm py-2 px-3"
+          >
+            <Plus className="h-4 w-4" /> Add Product Batch
+          </button>
+        </div>
+      </div>
+
+      {activeTab === "batches" && (
+        <Panel
+          title="Product Batches and Shelf-Life Safety"
+          actions={
+            <div className="flex flex-wrap items-center gap-3">
+              <SearchBox value={search} setValue={setSearch} />
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-md text-xs font-bold">
+                {[
+                  ["ALL", "All"],
+                  ["SAFE", ">90d Safe"],
+                  ["YELLOW", "60-90d"],
+                  ["ORANGE", "30-60d"],
+                  ["CRITICAL", "<=30d"],
+                  ["EXPIRED", "Expired"]
+                ].map(([f, lbl]) => (
+                  <button
+                    key={f}
+                    onClick={() => setStatusFilter(f)}
+                    className={`px-2.5 py-1 rounded transition-colors ${statusFilter === f ? "bg-white text-paddy-800 shadow-xs" : "text-slate-600 hover:text-slate-900"}`}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            </div>
+          }
+        >
+          {!filteredBatches.length ? (
+            <p className="p-8 text-center text-sm text-slate-500 bg-slate-50 rounded-lg">No product batches matching filter.</p>
+          ) : (
+            <div className="overflow-x-auto rounded border border-slate-200">
+              <table className="w-full text-xs">
+                <thead className="bg-paddy-50 text-left font-bold">
+                  <tr>
+                    <th className="p-2.5">Product Name</th>
+                    <th className="p-2.5">Batch Number</th>
+                    <th className="p-2.5">Mfg Date</th>
+                    <th className="p-2.5">Expiry Date</th>
+                    <th className="p-2.5">Shelf Life Status</th>
+                    <th className="p-2.5">Stock</th>
+                    <th className="p-2.5">Selling Price</th>
+                    <th className="p-2.5">Supplier</th>
+                    <th className="p-2.5 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {filteredBatches.map(b => {
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    const exp = b.expiry_date ? new Date(b.expiry_date) : null;
+                    if (exp) exp.setHours(0, 0, 0, 0);
+                    const days = exp ? Math.round((exp - today) / 86400000) : 999;
+                    const isExpired = days < 0;
+
+                    let badgeClass = "bg-emerald-100 text-emerald-800 border-emerald-300";
+                    let badgeText = `${days} days left (Safe)`;
+                    if (isExpired) {
+                      badgeClass = "bg-red-800 text-white font-black animate-pulse";
+                      badgeText = `EXPIRED (${Math.abs(days)}d ago) - BLOCKED`;
+                    } else if (days <= 30) {
+                      badgeClass = "bg-red-100 text-red-800 border-red-300 font-bold";
+                      badgeText = `CRITICAL: ${days} days left`;
+                    } else if (days <= 60) {
+                      badgeClass = "bg-orange-100 text-orange-800 border-orange-300 font-bold";
+                      badgeText = `Warning: ${days} days left`;
+                    } else if (days <= 90) {
+                      badgeClass = "bg-amber-100 text-amber-800 border-amber-300";
+                      badgeText = `Watchlist: ${days} days left`;
+                    }
+
+                    return (
+                      <tr key={b.id} className={`hover:bg-slate-50 ${isExpired ? "bg-red-50/40" : ""}`}>
+                        <td className="p-2.5 font-bold text-slate-900">{b.product_name}</td>
+                        <td className="p-2.5 font-mono font-bold text-slate-700">{b.batch_number}</td>
+                        <td className="p-2.5 text-slate-600">{b.mfg_date || "-"}</td>
+                        <td className="p-2.5 font-semibold text-slate-800">{b.expiry_date}</td>
+                        <td className="p-2.5">
+                          <span className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] border ${badgeClass}`}>
+                            {badgeText}
+                          </span>
+                        </td>
+                        <td className="p-2.5 font-bold text-slate-800">
+                          {b.current_stock} {b.unit || "Bag"}
+                        </td>
+                        <td className="p-2.5 font-semibold">{currency.format(Number(b.selling_price || 0))}</td>
+                        <td className="p-2.5 text-slate-600">{b.supplier_name || "-"}</td>
+                        <td className="p-2.5 text-right">
+                          <div className="flex gap-2 items-center justify-end">
+                            <button
+                              onClick={() => openEditBatch(b)}
+                              className="text-paddy-700 hover:text-paddy-900 font-bold text-xs"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => handleDeleteBatch(b.id)}
+                              className="text-red-600 hover:text-red-800 font-bold text-xs"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Panel>
+      )}
+
+      {activeTab === "adjust" && (
+        <Panel title="Stock Adjustment">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <Select
+              label="Product"
+              value={adjust.product_id}
+              options={["", ...products.map((p) => p.id)]}
+              labels={{ "": "Select product", ...Object.fromEntries(products.map((p) => [p.id, p.name])) }}
+              onChange={(product_id) => setAdjust({ ...adjust, product_id })}
+            />
+            <Input
+              label="Qty (+ inward / - outward)"
+              type="number"
+              value={adjust.qty}
+              onChange={(qty) => setAdjust({ ...adjust, qty })}
+            />
+            <Select
+              label="Type"
+              value={adjust.type}
+              options={["adjustment", "damage", "return", "opening"]}
+              onChange={(type) => setAdjust({ ...adjust, type })}
+            />
+            <Input
+              label="Note"
+              value={adjust.note}
+              onChange={(note) => setAdjust({ ...adjust, note })}
+            />
+          </div>
+          <button onClick={handleAdjustStock} className="btn mt-4 flex items-center gap-2">
+            <Save className="h-4 w-4" /> Save Adjustment
+          </button>
+        </Panel>
+      )}
+
+      {activeTab === "logs" && (
+        <Panel title="Stock Movement Logs">
+          <DataTable
+            rows={logs}
+            columns={["product_name", "type", "qty", "note", "created_by", "created_at"]}
+          />
+        </Panel>
+      )}
+
+      {/* Add / Edit Batch Modal */}
+      {batchModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="h-9 w-9 rounded-full bg-paddy-100 flex items-center justify-center text-paddy-800">
+                  <Boxes className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-800">{editingBatch ? "Edit Product Batch" : "Add Product Batch"}</h2>
+                  <p className="text-xs text-slate-500">Track shelf-life and chemical expiry safeguards</p>
+                </div>
+              </div>
+              <button onClick={() => setBatchModalOpen(false)} className="p-1 hover:bg-slate-100 rounded-full">
+                <X className="h-5 w-5 text-slate-500" />
+              </button>
+            </div>
+
+            <div className="space-y-3 overflow-y-auto pr-1">
+              <Select
+                label="Product"
+                value={batchForm.product_id}
+                options={products.map(p => p.id)}
+                labels={Object.fromEntries(products.map(p => [p.id, `${p.name} (${p.unit || "Bag"})`]))}
+                onChange={product_id => {
+                  const sel = products.find(p => p.id === product_id);
+                  setBatchForm({
+                    ...batchForm,
+                    product_id,
+                    product_name: sel?.name || "",
+                    unit: sel?.unit || "Bag",
+                    purchase_price: sel?.purchase_price || "",
+                    selling_price: sel?.selling_price || ""
+                  });
+                }}
+              />
+
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  label="Batch Number"
+                  value={batchForm.batch_number}
+                  onChange={batch_number => setBatchForm({ ...batchForm, batch_number })}
+                />
+                <Input
+                  label="Current Stock Quantity"
+                  type="number"
+                  value={batchForm.current_stock}
+                  onChange={current_stock => setBatchForm({ ...batchForm, current_stock })}
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <Input
+                  label="Purchase Date"
+                  type="date"
+                  value={batchForm.purchase_date}
+                  onChange={purchase_date => setBatchForm({ ...batchForm, purchase_date })}
+                />
+                <Input
+                  label="Mfg Date"
+                  type="date"
+                  value={batchForm.mfg_date}
+                  onChange={mfg_date => setBatchForm({ ...batchForm, mfg_date })}
+                />
+                <Input
+                  label="Expiry Date *"
+                  type="date"
+                  value={batchForm.expiry_date}
+                  onChange={expiry_date => setBatchForm({ ...batchForm, expiry_date })}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  label="Purchase Price (₹)"
+                  type="number"
+                  value={batchForm.purchase_price}
+                  onChange={purchase_price => setBatchForm({ ...batchForm, purchase_price })}
+                />
+                <Input
+                  label="Selling Price (₹)"
+                  type="number"
+                  value={batchForm.selling_price}
+                  onChange={selling_price => setBatchForm({ ...batchForm, selling_price })}
+                />
+              </div>
+
+              <Input
+                label="Supplier Name"
+                value={batchForm.supplier_name}
+                onChange={supplier_name => setBatchForm({ ...batchForm, supplier_name })}
+              />
+            </div>
+
+            <div className="flex gap-3 pt-3 border-t border-slate-200">
+              <button
+                onClick={handleSaveBatch}
+                className="btn flex-1 py-2.5 bg-paddy-700 hover:bg-paddy-800 text-white font-bold"
+              >
+                {editingBatch ? "Update Batch" : "Save Product Batch"}
+              </button>
+              <button
+                onClick={() => setBatchModalOpen(false)}
+                className="btn-secondary flex-1 py-2.5"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-
 function Reports({ api, notify }) {
   const [type, setType] = useState("sales-register");
   const [rows, setRows] = useState([]);

@@ -3,26 +3,151 @@
     "retrainIntervalHours": 24,
     "minNewTransactionsToRetrain": 5,
     "riskDelayThresholdDays": 15,
-    "lastRetrained": "2026-11-06T11:59:31.351Z",
-    "totalSalesCountAtTraining": 0
+    "lastRetrained": "2026-11-07T16:41:36.800Z",
+    "totalSalesCountAtTraining": 3
   },
   "predictions": {
-    "sales30Days": 0,
+    "sales30Days": 17514,
     "revenueForecast": {
-      "daily": 0,
-      "weekly": 0,
-      "monthly": 0,
-      "profit": 0
+      "daily": 584,
+      "weekly": 4379,
+      "monthly": 17514,
+      "profit": 1661
     },
-    "productDemand": [],
-    "creditRisks": [],
+    "productDemand": [
+      {
+        "id": "f7239fbc-043a-4101-83ec-a61034ea6e2d",
+        "name": "Coromandel Gromor 14-35-14 (50kg Bag)",
+        "brand": "Coromandel International",
+        "product_type": "Micronutrients",
+        "currentStock": -2,
+        "predictedDemand": 168,
+        "recommendation": "Reorder 170",
+        "reorderQty": 170,
+        "runoutDays": 0,
+        "unit": "Bag"
+      },
+      {
+        "id": "dcc14fdb-1566-4201-90c1-b25133ee6814",
+        "name": "Coromandel Gromor 14-35-14 (50kg Bag)",
+        "brand": "Coromandel International",
+        "product_type": "Micronutrients",
+        "currentStock": 120,
+        "predictedDemand": 48,
+        "recommendation": "Sufficient",
+        "reorderQty": 0,
+        "runoutDays": 75,
+        "unit": "Bag"
+      },
+      {
+        "id": "a64efec4-083a-4b25-93c2-39445ec637eb",
+        "name": "Urea 45kg",
+        "brand": "IFFCO",
+        "product_type": "Urea",
+        "currentStock": 0,
+        "predictedDemand": 0,
+        "recommendation": "Sufficient",
+        "reorderQty": 0,
+        "runoutDays": 999,
+        "unit": "Bag"
+      },
+      {
+        "id": "e2ca99f4-d287-4d2d-adfc-000e969f4efc",
+        "name": "DAP 50kg",
+        "brand": "Coromandel",
+        "product_type": "DAP",
+        "currentStock": 85,
+        "predictedDemand": 0,
+        "recommendation": "Sufficient",
+        "reorderQty": 0,
+        "runoutDays": 999,
+        "unit": "Bag"
+      },
+      {
+        "id": "b01ba0f0-1b39-4dc6-accd-728b7deabed9",
+        "name": "MOP Potash 50kg",
+        "brand": "IPL",
+        "product_type": "Potash",
+        "currentStock": 45,
+        "predictedDemand": 0,
+        "recommendation": "Sufficient",
+        "reorderQty": 0,
+        "runoutDays": 999,
+        "unit": "Bag"
+      },
+      {
+        "id": "8039f754-6393-49d5-92b3-9f5fa32e3612",
+        "name": "Paddy Seeds MTU-1010",
+        "brand": "Nuziveedu",
+        "product_type": "Seeds",
+        "currentStock": 30,
+        "predictedDemand": 0,
+        "recommendation": "Sufficient",
+        "reorderQty": 0,
+        "runoutDays": 999,
+        "unit": "Packet"
+      },
+      {
+        "id": "ace95d4f-ac15-42a5-9d71-2d9430b1195c",
+        "name": "Zinc Sulphate 10kg",
+        "brand": "Zuari",
+        "product_type": "Micronutrients",
+        "currentStock": 18,
+        "predictedDemand": 0,
+        "recommendation": "Sufficient",
+        "reorderQty": 0,
+        "runoutDays": 999,
+        "unit": "Kg"
+      }
+    ],
+    "creditRisks": [
+      {
+        "id": "8093ca29-596e-4fb2-ae9e-d550028d2059",
+        "name": "Suresh V. Pujar (c/o Venkatesh Pujar)",
+        "mobile": "9945012345",
+        "village": "Kariganuru",
+        "outstandingAmount": 0,
+        "averageDelayDays": 0,
+        "riskLevel": "Low"
+      },
+      {
+        "id": "6fb8ca11-b3ba-413a-9078-1c026330925b",
+        "name": "Harshavardhan JM",
+        "mobile": "8660548244",
+        "village": "",
+        "outstandingAmount": 0,
+        "averageDelayDays": 0,
+        "riskLevel": "Low"
+      },
+      {
+        "id": "e2499d2b-0ebc-4df2-8ee0-2a675a32ff99",
+        "name": "Harshavardhan JM",
+        "mobile": "8660548244",
+        "village": "",
+        "outstandingAmount": 0,
+        "averageDelayDays": 0,
+        "riskLevel": "Low"
+      },
+      {
+        "id": "2dad310a-6885-4321-a0c1-447c345b65f1",
+        "name": "Mahadeva",
+        "mobile": "9900012345",
+        "village": "Srirangapatna",
+        "outstandingAmount": 0,
+        "averageDelayDays": 0,
+        "riskLevel": "Low"
+      }
+    ],
     "insights": [
-      "System has been reset to zero. Record new sales and purchases to generate predictive insights."
+      "📉 Store sales are predicted to stabilize or decline slightly next month due to seasonal adjustments.",
+      "💰 This month is predicted to achieve higher revenue (₹17,514) than last month (₹0).",
+      "⚠️ **Inventory Alert:** Product **Coromandel Gromor 14-35-14 (50kg Bag)** is expected to run out in approximately **0** days. Recommended reorder: **170 Bags**.",
+      "🌱 **Sowing Season Alert:** Fertilizer and seeds demand is expected to remain high this month. Keep minimum stock limits elevated."
     ],
     "metrics": {
       "salesMAE": 0,
-      "demandMAE": 0,
-      "riskAccuracy": 1
+      "demandMAE": 0.5,
+      "riskAccuracy": 0.934698543225112
     }
   }
 }

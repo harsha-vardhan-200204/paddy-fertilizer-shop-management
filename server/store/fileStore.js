@@ -26,7 +26,11 @@ const collections = [
   "interest_history",
   "stock_logs",
   "digital_deliveries",
-  "invoice_audit_logs"
+  "invoice_audit_logs",
+  "invoice_sequences",
+  "product_batches",
+  "credit_settings",
+  "expiry_alert_history"
 ];
 
 export class FileStore {
@@ -120,6 +124,146 @@ export class FileStore {
         if (seededLedger) {
           await this.persist();
         }
+      }
+
+      // Ensure Credit Settings
+      if (!this.db.credit_settings || this.db.credit_settings.length === 0) {
+        this.db.credit_settings = [{
+          id: "default",
+          interest_enabled: true,
+          monthly_interest_rate: 2.0,
+          calculation_type: "simple",
+          grace_period_days: 0,
+          calculation_day: 1,
+          payment_allocation_policy: "principal_first",
+          default_credit_due_days: 30,
+          expiry_alerts_enabled: true,
+          alert_periods: "90,60,30,15,7,0",
+          admin_notification_email: "harshavardhanjunji@gmail.com",
+          admin_notification_whatsapp: "+918660548244",
+          customer_bill_whatsapp_enabled: true,
+          customer_bill_email_enabled: true,
+          admin_expiry_email_enabled: true,
+          admin_expiry_whatsapp_enabled: true,
+          updated_at: now()
+        }];
+        await this.persist();
+      }
+
+      // Ensure Product Batches covering all expiry intervals
+      if (!this.db.product_batches || this.db.product_batches.length === 0) {
+        const todayMs = Date.now();
+        const addDays = (d) => new Date(todayMs + d * 86400000).toISOString().slice(0, 10);
+        const subDays = (d) => new Date(todayMs - d * 86400000).toISOString().slice(0, 10);
+
+        const sampleBatches = [
+          {
+            id: id(),
+            product_name: "Coromandel Gromor 14-35-14 (50kg Bag)",
+            batch_number: "GRO-2026-N1",
+            purchase_date: subDays(30),
+            mfg_date: subDays(60),
+            expiry_date: addDays(240), // >90 Days - GREEN
+            initial_stock: 150,
+            current_stock: 120,
+            unit: "Bag",
+            purchase_price: 1350,
+            selling_price: 1470,
+            supplier_name: "Coromandel International Ltd",
+            status: "ACTIVE",
+            created_at: now()
+          },
+          {
+            id: id(),
+            product_name: "DAP 50kg",
+            batch_number: "DAP-2026-Y75",
+            purchase_date: subDays(15),
+            mfg_date: subDays(90),
+            expiry_date: addDays(75), // 60-90 Days - YELLOW
+            initial_stock: 100,
+            current_stock: 85,
+            unit: "Bag",
+            purchase_price: 1200,
+            selling_price: 1350,
+            supplier_name: "IFFCO Hub Davangere",
+            status: "DUE_SOON",
+            created_at: now()
+          },
+          {
+            id: id(),
+            product_name: "MOP Potash 50kg",
+            batch_number: "MOP-2026-O45",
+            purchase_date: subDays(45),
+            mfg_date: subDays(120),
+            expiry_date: addDays(45), // 30-60 Days - ORANGE
+            initial_stock: 80,
+            current_stock: 45,
+            unit: "Bag",
+            purchase_price: 1550,
+            selling_price: 1700,
+            supplier_name: "IPL Potash Corporation",
+            status: "WARNING",
+            created_at: now()
+          },
+          {
+            id: id(),
+            product_name: "Paddy Seeds MTU-1010",
+            batch_number: "SED-2026-R12",
+            purchase_date: subDays(60),
+            mfg_date: subDays(150),
+            expiry_date: addDays(12), // <30 Days - RED
+            initial_stock: 60,
+            current_stock: 30,
+            unit: "Bag",
+            purchase_price: 850,
+            selling_price: 980,
+            supplier_name: "Karnataka State Seeds Corporation",
+            status: "CRITICAL",
+            created_at: now()
+          },
+          {
+            id: id(),
+            product_name: "Zinc Sulphate 10kg",
+            batch_number: "ZNC-2025-EXP",
+            purchase_date: subDays(180),
+            mfg_date: subDays(365),
+            expiry_date: subDays(8), // EXPIRED - QUARANTINED
+            initial_stock: 50,
+            current_stock: 18,
+            unit: "Packet",
+            purchase_price: 380,
+            selling_price: 450,
+            supplier_name: "Multiplex Bio Tech",
+            status: "EXPIRED",
+            created_at: now()
+          }
+        ];
+
+        this.db.product_batches = sampleBatches;
+
+        // Sync batch stock to products
+        for (const batch of sampleBatches) {
+          const prod = this.db.products.find(p => p.name.toLowerCase().includes(batch.product_name.slice(0, 10).toLowerCase()));
+          if (prod) {
+            batch.product_id = prod.id;
+            prod.current_stock = Math.max(Number(prod.current_stock || 0), batch.current_stock);
+            prod.batch_number = batch.batch_number;
+            prod.expiry_date = batch.expiry_date;
+          }
+        }
+        await this.persist();
+      }
+
+      // Ensure customer test emails
+      if (this.db.customers && this.db.customers.length > 0) {
+        let updatedCust = false;
+        for (const cust of this.db.customers) {
+          if (!cust.email) {
+            cust.email = "harshavardhanjunji@gmail.com";
+            updatedCust = true;
+          }
+        }
+        if (updatedCust) await this.persist();
       }
     } catch (_error) {
       this.db = Object.fromEntries(collections.map((key) => [key, []]));
@@ -284,6 +428,25 @@ export class FileStore {
   }
 
   async createSale(data, user) {
+    // Strict Product Expiry Validation: Block expired stock from sales
+    const todayDate = today();
+    for (const item of data.items || []) {
+      const product = this.db.products.find(p => p.id === item.product_id);
+      let batch = null;
+      if (item.batch_number && this.db.product_batches) {
+        batch = this.db.product_batches.find(b => b.batch_number === item.batch_number);
+      }
+      const expDate = batch?.expiry_date || product?.expiry_date;
+      if (expDate && String(expDate) < todayDate) {
+        const prodName = item.product_name || item.name || product?.name || "Product";
+        const bNum = batch?.batch_number || product?.batch_number || "Default";
+        throw Object.assign(
+          new Error(`Strict Regulatory Warning: Stock for '${prodName}' (Batch: ${bNum}) EXPIRED on ${expDate}. Selling expired agricultural inputs is prohibited by government regulations. Please quarantine this batch.`),
+          { status: 400 }
+        );
+      }
+    }
+
     const customer = data.customer_id ? await this.getById("customers", data.customer_id) : null;
     const invNumber = data.invoice_number || this.getNextInvoiceNumber(data.date || today());
     const grandTotal = Number(data.grand_total || 0);
@@ -357,6 +520,12 @@ export class FileStore {
         created_at: now()
       });
       await this.adjustStock(item.product_id, { qty: -Number(item.qty || 0), type: "sale", note: sale.invoice_number }, user);
+      if (item.batch_number && this.db.product_batches) {
+        const batch = this.db.product_batches.find(b => b.batch_number === item.batch_number);
+        if (batch) {
+          batch.current_stock = round(Number(batch.current_stock || 0) - Number(item.qty || 0));
+        }
+      }
     }
 
     if (sale.customer_id && sale.balance_due > 0) {
@@ -459,6 +628,12 @@ export class FileStore {
         type: "sale_cancellation",
         note: `Cancelled Invoice ${sale.invoice_number}`
       }, user);
+      if (item.batch_number && this.db.product_batches) {
+        const batch = this.db.product_batches.find(b => b.batch_number === item.batch_number);
+        if (batch) {
+          batch.current_stock = round(Number(batch.current_stock || 0) + Number(item.qty || 0));
+        }
+      }
     }
 
     // Revert credit from customer pending balance
@@ -807,6 +982,166 @@ export class FileStore {
       "taxable": this.db.sale_items.map((item) => ({ product_name: item.product_name, gst_percent: item.gst_percent, taxable: Number(item.total || 0) - Number(item.cgst || 0) - Number(item.sgst || 0), total: item.total }))
     }[type] || [];
     return { type, rows };
+  }
+
+  async getCreditSettings() {
+    this.db.credit_settings = this.db.credit_settings || [];
+    if (this.db.credit_settings.length === 0) {
+      this.db.credit_settings.push({
+        id: "default",
+        interest_enabled: true,
+        monthly_interest_rate: 2.0,
+        calculation_type: "simple",
+        grace_period_days: 0,
+        calculation_day: 1,
+        payment_allocation_policy: "principal_first",
+        default_credit_due_days: 30,
+        expiry_alerts_enabled: true,
+        alert_periods: "90,60,30,15,7,0",
+        admin_notification_email: "harshavardhanjunji@gmail.com",
+        admin_notification_whatsapp: "+918660548244",
+        customer_bill_whatsapp_enabled: true,
+        customer_bill_email_enabled: true,
+        admin_expiry_email_enabled: true,
+        admin_expiry_whatsapp_enabled: true,
+        updated_at: now()
+      });
+      await this.persist();
+    }
+    return this.db.credit_settings[0];
+  }
+
+  async updateCreditSettings(data) {
+    const current = await this.getCreditSettings();
+    this.db.credit_settings[0] = { ...current, ...data, updated_at: now() };
+    await this.persist();
+    return this.db.credit_settings[0];
+  }
+
+  async listBatches(query = {}) {
+    const todayMs = new Date().setHours(0, 0, 0, 0);
+    this.db.product_batches = this.db.product_batches || [];
+
+    const list = this.db.product_batches.map((batch) => {
+      let daysRemaining = null;
+      let expiryStatus = "ACTIVE";
+      if (batch.expiry_date) {
+        const expMs = new Date(batch.expiry_date).getTime();
+        daysRemaining = Math.ceil((expMs - todayMs) / 86400000);
+        if (daysRemaining <= 0) {
+          expiryStatus = "EXPIRED";
+        } else if (daysRemaining <= 30) {
+          expiryStatus = "CRITICAL";
+        } else if (daysRemaining <= 60) {
+          expiryStatus = "WARNING";
+        } else if (daysRemaining <= 90) {
+          expiryStatus = "DUE_SOON";
+        } else {
+          expiryStatus = "GOOD";
+        }
+      }
+      return {
+        ...batch,
+        days_remaining: daysRemaining,
+        expiry_status: expiryStatus
+      };
+    });
+
+    if (query.status && query.status !== "ALL") {
+      return list.filter((b) => b.expiry_status === query.status || b.status === query.status);
+    }
+
+    return this.filterBySearch(list, query, ["product_name", "batch_number", "supplier_name", "expiry_status"]);
+  }
+
+  async createBatch(data, user) {
+    this.db.product_batches = this.db.product_batches || [];
+    const stock = Number(data.initial_stock || data.current_stock || 0);
+    const batch = {
+      id: id(),
+      product_id: data.product_id || "",
+      product_name: data.product_name || "",
+      batch_number: data.batch_number || `BAT-${Date.now().toString().slice(-6)}`,
+      purchase_date: data.purchase_date || today(),
+      mfg_date: data.mfg_date || "",
+      expiry_date: data.expiry_date || "",
+      initial_stock: stock,
+      current_stock: stock,
+      unit: data.unit || "Bag",
+      purchase_price: Number(data.purchase_price || 0),
+      selling_price: Number(data.selling_price || 0),
+      supplier_name: data.supplier_name || "Direct Supplier",
+      status: "ACTIVE",
+      created_at: now(),
+      updated_at: now()
+    };
+    this.db.product_batches.push(batch);
+
+    // Sync to product
+    if (batch.product_id) {
+      await this.adjustStock(batch.product_id, {
+        qty: stock,
+        type: "batch_addition",
+        note: `Batch ${batch.batch_number} added`
+      }, user);
+    }
+
+    await this.persist();
+    return batch;
+  }
+
+  async updateBatch(batchId, data) {
+    this.db.product_batches = this.db.product_batches || [];
+    const idx = this.db.product_batches.findIndex(b => b.id === batchId);
+    if (idx < 0) throw Object.assign(new Error("Batch not found"), { status: 404 });
+    this.db.product_batches[idx] = { ...this.db.product_batches[idx], ...data, updated_at: now() };
+    await this.persist();
+    return this.db.product_batches[idx];
+  }
+
+  async deleteBatch(batchId) {
+    this.db.product_batches = (this.db.product_batches || []).filter(b => b.id !== batchId);
+    await this.persist();
+    return true;
+  }
+
+  async listCustomerInterestHistory(customerId) {
+    this.db.interest_history = this.db.interest_history || [];
+    if (customerId) {
+      return this.db.interest_history
+        .filter(h => h.customer_id === customerId)
+        .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+    }
+    return this.db.interest_history.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+  }
+
+  async recordInterestEntry(record) {
+    this.db.interest_history = this.db.interest_history || [];
+    const entry = { id: id(), ...record, created_at: now() };
+    this.db.interest_history.push(entry);
+
+    if (record.customer_id) {
+      const cust = this.db.customers.find(c => c.id === record.customer_id);
+      if (cust) {
+        cust.pending_balance = record.total_balance_after;
+        cust.credit_amount = record.total_balance_after;
+      }
+    }
+    await this.persist();
+    return entry;
+  }
+
+  async listExpiryAlertHistory() {
+    this.db.expiry_alert_history = this.db.expiry_alert_history || [];
+    return this.db.expiry_alert_history.sort((a, b) => String(b.sent_at || "").localeCompare(String(a.sent_at || "")));
+  }
+
+  async recordExpiryAlert(record) {
+    this.db.expiry_alert_history = this.db.expiry_alert_history || [];
+    const entry = { id: id(), ...record, sent_at: record.sent_at || now() };
+    this.db.expiry_alert_history.push(entry);
+    await this.persist();
+    return entry;
   }
 
   filterBySearch(rows, query, keys) {

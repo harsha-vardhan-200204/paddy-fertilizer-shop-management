@@ -114,6 +114,27 @@ export class PostgresStore {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
+
+      // Strict Product Expiry Validation: Block expired stock from sales
+      const todayDate = today();
+      for (const item of data.items || []) {
+        if (item.product_id) {
+          const prodRes = await client.query("select name, expiry_date, batch_number from products where id = $1", [item.product_id]);
+          const prod = prodRes.rows[0];
+          let expDate = prod?.expiry_date;
+          if (item.batch_number) {
+            const bRes = await client.query("select expiry_date from product_batches where batch_number = $1 limit 1", [item.batch_number]);
+            if (bRes.rows[0]?.expiry_date) expDate = bRes.rows[0].expiry_date;
+          }
+          if (expDate && String(expDate) < todayDate) {
+            throw Object.assign(
+              new Error(`Strict Regulatory Warning: Stock for '${item.product_name || prod?.name}' (Batch: ${item.batch_number || prod?.batch_number || 'N/A'}) EXPIRED on ${expDate}. Selling expired agricultural inputs is strictly prohibited.`),
+              { status: 400 }
+            );
+          }
+        }
+      }
+
       const invoiceNumber = data.invoice_number || await this.nextInvoiceNumber(client, data.date || today());
       const customer = data.customer_id ? await client.query("select * from customers where id = $1", [data.customer_id]) : { rows: [] };
       const c = customer.rows[0] || {};
@@ -567,6 +588,119 @@ export class PostgresStore {
     return result.rows[0];
   }
 
+  async getCreditSettings() {
+    let settings = await this.one("select * from credit_settings where id = 'default'");
+    if (!settings) {
+      settings = await this.one(`
+        insert into credit_settings (id, interest_enabled, monthly_interest_rate, calculation_type, grace_period_days, payment_allocation_policy, alert_periods, admin_notification_email, admin_notification_whatsapp)
+        values ('default', true, 2.0, 'simple', 0, 'principal_first', '90,60,30,15,7,0', 'harshavardhanjunji@gmail.com', '+918660548244')
+        returning *
+      `);
+    }
+    return settings;
+  }
+
+  async updateCreditSettings(data) {
+    const keys = Object.keys(data).filter(k => k !== 'id' && k !== 'updated_at');
+    const sets = keys.map((key, index) => `${key} = $${index + 1}`);
+    const result = await this.pool.query(
+      `update credit_settings set ${sets.join(",")}, updated_at = now() where id = 'default' returning *`,
+      keys.map(k => data[k])
+    );
+    return result.rows[0];
+  }
+
+  async listBatches(query = {}) {
+    const term = `%${query.search || ""}%`;
+    const where = query.search
+      ? "where product_name ilike $1 or batch_number ilike $1 or supplier_name ilike $1"
+      : "";
+    const values = query.search ? [term] : [];
+    const rows = await this.many(`select * from product_batches ${where} order by expiry_date asc nulls last`, values);
+
+    const todayMs = new Date().setHours(0, 0, 0, 0);
+    const list = rows.map(b => {
+      let daysRemaining = null;
+      let expiryStatus = "ACTIVE";
+      if (b.expiry_date) {
+        const expMs = new Date(b.expiry_date).getTime();
+        daysRemaining = Math.ceil((expMs - todayMs) / 86400000);
+        if (daysRemaining <= 0) expiryStatus = "EXPIRED";
+        else if (daysRemaining <= 30) expiryStatus = "CRITICAL";
+        else if (daysRemaining <= 60) expiryStatus = "WARNING";
+        else if (daysRemaining <= 90) expiryStatus = "DUE_SOON";
+        else expiryStatus = "GOOD";
+      }
+      return { ...b, days_remaining: daysRemaining, expiry_status: expiryStatus };
+    });
+
+    if (query.status && query.status !== "ALL") {
+      return list.filter(b => b.expiry_status === query.status || b.status === query.status);
+    }
+    return list;
+  }
+
+  async createBatch(data, user) {
+    const batch = await this.create("product_batches", {
+      product_id: data.product_id || null,
+      product_name: data.product_name,
+      batch_number: data.batch_number,
+      purchase_date: data.purchase_date || today(),
+      mfg_date: data.mfg_date || null,
+      expiry_date: data.expiry_date,
+      initial_stock: Number(data.initial_stock || data.current_stock || 0),
+      current_stock: Number(data.initial_stock || data.current_stock || 0),
+      unit: data.unit || "Bag",
+      purchase_price: Number(data.purchase_price || 0),
+      selling_price: Number(data.selling_price || 0),
+      supplier_name: data.supplier_name || "Direct Supplier",
+      status: "ACTIVE"
+    });
+
+    if (batch.product_id) {
+      await this.adjustStock(batch.product_id, {
+        qty: batch.initial_stock,
+        type: "batch_addition",
+        note: `Batch ${batch.batch_number} added`
+      }, user);
+    }
+    return batch;
+  }
+
+  async updateBatch(id, data) {
+    return this.update("product_batches", id, data);
+  }
+
+  async deleteBatch(id) {
+    return this.remove("product_batches", id);
+  }
+
+  async listCustomerInterestHistory(customerId) {
+    if (customerId) {
+      return this.many("select * from interest_history where customer_id = $1 order by created_at desc", [customerId]);
+    }
+    return this.many("select * from interest_history order by created_at desc");
+  }
+
+  async recordInterestEntry(record) {
+    const entry = await this.create("interest_history", record);
+    if (record.customer_id) {
+      await this.pool.query(
+        "update customers set pending_balance = $1, credit_amount = $1, updated_at = now() where id = $2",
+        [record.total_balance_after, record.customer_id]
+      );
+    }
+    return entry;
+  }
+
+  async listExpiryAlertHistory() {
+    return this.many("select * from expiry_alert_history order by sent_at desc");
+  }
+
+  async recordExpiryAlert(record) {
+    return this.create("expiry_alert_history", record);
+  }
+
   async many(sql, values = []) {
     const result = await this.pool.query(sql, values);
     return result.rows;
@@ -585,7 +719,13 @@ const tables = new Set([
   "sale_items",
   "digital_deliveries",
   "invoice_audit_logs",
-  "invoice_sequences"
+  "invoice_sequences",
+  "farmer_credit_ledger",
+  "credit_payments",
+  "interest_history",
+  "credit_settings",
+  "product_batches",
+  "expiry_alert_history"
 ]);
 const searchColumns = {
   products: ["name", "brand", "category", "product_type", "batch_number", "supplier_name"],
@@ -594,7 +734,9 @@ const searchColumns = {
   payments: ["note", "payment_method"],
   stock_logs: ["product_name", "type", "note"],
   sales: ["invoice_number", "customer_name", "mobile"],
-  purchases: ["invoice_number", "supplier_name"]
+  purchases: ["invoice_number", "supplier_name"],
+  product_batches: ["product_name", "batch_number", "supplier_name"],
+  farmer_credit_ledger: ["farmer_name", "mobile", "village", "invoice_id"]
 };
 
 function assertTable(table) {
