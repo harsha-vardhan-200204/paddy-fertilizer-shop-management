@@ -40,6 +40,7 @@ import {
   Clock,
   Ban,
   Eye,
+  Settings,
   X
 } from "lucide-react";
 import {
