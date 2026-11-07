@@ -2,6 +2,7 @@ import pg from "pg";
 import { randomUUID } from "crypto";
 import { round } from "../utils/reports.js";
 import { predictionEngine } from "../services/predictionEngine.js";
+import { getFinancialYear, formatInvoiceNumber } from "../utils/invoiceNumber.js";
 
 const { Pool } = pg;
 
@@ -113,31 +114,152 @@ export class PostgresStore {
     const client = await this.pool.connect();
     try {
       await client.query("begin");
-      const invoiceNumber = await this.nextInvoiceNumber(client);
+      const invoiceNumber = data.invoice_number || await this.nextInvoiceNumber(client, data.date || today());
       const customer = data.customer_id ? await client.query("select * from customers where id = $1", [data.customer_id]) : { rows: [] };
       const c = customer.rows[0] || {};
+
+      const grandTotal = Number(data.grand_total || 0);
+      const amountPaid = Number(data.amount_paid || 0);
+      const balanceDue = round(Math.max(0, grandTotal - amountPaid));
+
+      let paymentStatus = "PAID";
+      if (balanceDue > 0 && amountPaid > 0) {
+        paymentStatus = "PARTIAL";
+      } else if (balanceDue > 0) {
+        paymentStatus = "CREDIT";
+      }
+
+      const creditDays = Number(data.credit_days || 30);
+      const interestRate = Number(data.interest_rate || 2);
+      const pDate = data.date || today();
+      const dueDate = data.due_date || new Date(new Date(pDate).getTime() + creditDays * 86400000).toISOString().slice(0, 10);
+
       const sale = await client.query(
-        `insert into sales (id, invoice_number, date, customer_id, customer_name, mobile, village, billing_address, gstin, subtotal, cgst, sgst, grand_total, amount_paid, balance_due, payment_method, created_by)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) returning *`,
-        [randomUUID(), invoiceNumber, data.date || today(), data.customer_id || null, data.customer_name || c.name || "", data.mobile || c.mobile || "", data.village || c.village || "", data.billing_address || c.address || "", data.gstin || "", data.subtotal, data.cgst, data.sgst, data.grand_total, Number(data.amount_paid || 0), round(data.grand_total - Number(data.amount_paid || 0)), data.payment_method || "Cash", user?.name]
+        `insert into sales (
+          id, invoice_number, date, customer_id, customer_name, mobile, customer_email,
+          village, billing_address, gstin, customer_aadhaar, subtotal, cgst, sgst, igst,
+          total_tax, round_off, grand_total, amount_paid, balance_due, payment_method,
+          payment_status, status, is_interstate, state_of_supply, due_date, pdf_path,
+          created_by
+        ) values (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28
+        ) returning *`,
+        [
+          randomUUID(),
+          invoiceNumber,
+          pDate,
+          data.customer_id || null,
+          data.customer_name || c.name || "",
+          data.mobile || c.mobile || "",
+          data.customer_email || data.email || c.email || "",
+          data.village || c.village || "",
+          data.billing_address || c.address || "",
+          data.gstin || "",
+          data.customer_aadhaar || data.aadhaar_number || c.aadhaar || "",
+          round(data.subtotal),
+          round(data.cgst),
+          round(data.sgst),
+          round(data.igst || 0),
+          round(data.total_tax || (Number(data.cgst || 0) + Number(data.sgst || 0) + Number(data.igst || 0))),
+          round(data.round_off || 0),
+          grandTotal,
+          amountPaid,
+          balanceDue,
+          data.payment_method || "Cash",
+          paymentStatus,
+          "ISSUED",
+          Boolean(data.is_interstate),
+          data.state_of_supply || "29 - Karnataka",
+          dueDate,
+          data.pdf_path || "",
+          user?.name || "Shop Admin"
+        ]
       );
+
       for (const item of data.items || []) {
         await client.query(
-          `insert into sale_items (id, sale_id, product_id, product_name, hsn_code, qty, rate, discount, gst_percent, cgst, sgst, total)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-          [randomUUID(), sale.rows[0].id, item.product_id, item.product_name, item.hsn_code, item.qty, item.rate, item.discount, item.gst_percent, item.cgst, item.sgst, item.total]
+          `insert into sale_items (
+            id, sale_id, product_id, product_name, hsn_code, unit, qty, rate, discount,
+            taxable_amount, gst_percent, cgst, sgst, igst, total
+          ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+          [
+            randomUUID(),
+            sale.rows[0].id,
+            item.product_id,
+            item.product_name || item.name,
+            item.hsn_code,
+            item.unit || "Bag",
+            item.qty,
+            item.rate,
+            item.discount || 0,
+            item.taxable_amount ?? (item.qty * item.rate - (item.discount || 0)),
+            item.gst_percent,
+            item.cgst || 0,
+            item.sgst || 0,
+            item.igst || 0,
+            item.total
+          ]
         );
+
         const qty = Number(item.qty || 0);
         const stock = await client.query(
           "update products set current_stock = coalesce(current_stock, 0) - $1, updated_at = now() where id = $2 returning name",
           [qty, item.product_id]
         );
         if (!stock.rows[0]) throw Object.assign(new Error(`Product not found for stock update: ${item.product_name || item.product_id}`), { status: 404 });
-        await client.query("insert into stock_logs (id, product_id, product_name, type, qty, note, created_by) values ($1,$2,$3,$4,$5,$6,$7)", [randomUUID(), item.product_id, item.product_name || stock.rows[0].name, "sale", -qty, invoiceNumber, user?.name]);
+        await client.query(
+          "insert into stock_logs (id, product_id, product_name, type, qty, note, created_by) values ($1,$2,$3,$4,$5,$6,$7)",
+          [randomUUID(), item.product_id, item.product_name || stock.rows[0].name, "sale", -qty, invoiceNumber, user?.name]
+        );
       }
+
       if (data.customer_id && sale.rows[0].balance_due > 0) {
-        await client.query("update customers set pending_balance = coalesce(pending_balance,0) + $1, credit_amount = coalesce(credit_amount,0) + $1 where id = $2", [sale.rows[0].balance_due, data.customer_id]);
+        await client.query(
+          "update customers set pending_balance = coalesce(pending_balance,0) + $1, credit_amount = coalesce(credit_amount,0) + $1 where id = $2",
+          [sale.rows[0].balance_due, data.customer_id]
+        );
+        await client.query(
+          `insert into farmer_credit_ledger (
+            id, customer_id, farmer_id, farmer_name, mobile, village, invoice_id, sale_id,
+            purchase_date, due_date, credit_amount, principal_amount, outstanding_principal,
+            amount_paid, interest_rate, credit_due_days, status
+          ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+          [
+            randomUUID(),
+            data.customer_id,
+            data.customer_id,
+            data.customer_name || c.name || "",
+            data.mobile || c.mobile || "",
+            data.village || c.village || "",
+            invoiceNumber,
+            sale.rows[0].id,
+            pDate,
+            dueDate,
+            sale.rows[0].balance_due,
+            sale.rows[0].balance_due,
+            sale.rows[0].balance_due,
+            0,
+            interestRate,
+            creditDays,
+            "PENDING"
+          ]
+        );
       }
+
+      // Record in audit log
+      await client.query(
+        `insert into invoice_audit_logs (id, invoice_number, action, performed_by, reason, details)
+         values ($1,$2,$3,$4,$5,$6)`,
+        [
+          randomUUID(),
+          invoiceNumber,
+          "INVOICE_CREATED",
+          user?.name || "Shop Admin",
+          "Sale transaction recorded",
+          JSON.stringify({ grand_total: grandTotal, amount_paid: amountPaid, balance_due: balanceDue, payment_status: paymentStatus })
+        ]
+      );
+
       await client.query("commit");
       return this.getSale(sale.rows[0].id);
     } catch (error) {
@@ -146,6 +268,105 @@ export class PostgresStore {
     } finally {
       client.release();
     }
+  }
+
+  async cancelSale(saleId, reason = "Cancelled by admin", user) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("begin");
+      const saleRes = await client.query("select * from sales where id = $1 or invoice_number = $1", [saleId]);
+      if (!saleRes.rows[0]) throw Object.assign(new Error("Invoice not found"), { status: 404 });
+      const sale = saleRes.rows[0];
+      if (sale.status === "CANCELLED") throw Object.assign(new Error("Invoice is already cancelled"), { status: 400 });
+
+      // Mark cancelled
+      await client.query(
+        "update sales set status = 'CANCELLED', cancellation_reason = $1, cancelled_at = now(), cancelled_by = $2 where id = $3",
+        [reason, user?.name || "Admin", sale.id]
+      );
+
+      // Revert items to stock
+      const items = await client.query("select * from sale_items where sale_id = $1", [sale.id]);
+      for (const item of items.rows) {
+        await client.query(
+          "update products set current_stock = coalesce(current_stock, 0) + $1, updated_at = now() where id = $2",
+          [Number(item.qty || 0), item.product_id]
+        );
+        await client.query(
+          "insert into stock_logs (id, product_id, product_name, type, qty, note, created_by) values ($1,$2,$3,$4,$5,$6,$7)",
+          [randomUUID(), item.product_id, item.product_name, "sale_cancellation", Number(item.qty || 0), `Cancelled Invoice ${sale.invoice_number}`, user?.name]
+        );
+      }
+
+      // Revert customer credit
+      if (sale.customer_id && sale.balance_due > 0) {
+        await client.query(
+          "update customers set pending_balance = greatest(0, coalesce(pending_balance, 0) - $1), credit_amount = greatest(0, coalesce(credit_amount, 0) - $1) where id = $2",
+          [sale.balance_due, sale.customer_id]
+        );
+        await client.query(
+          "update farmer_credit_ledger set status = 'CANCELLED', outstanding_principal = 0 where sale_id = $1 or invoice_id = $2",
+          [sale.id, sale.invoice_number]
+        );
+      }
+
+      // Audit log
+      await client.query(
+        "insert into invoice_audit_logs (id, invoice_number, action, performed_by, reason) values ($1,$2,$3,$4,$5)",
+        [randomUUID(), sale.invoice_number, "INVOICE_CANCELLED", user?.name || "Admin", reason]
+      );
+
+      await client.query("commit");
+      return this.getSale(sale.id);
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async logDigitalDelivery(delivery) {
+    const client = await this.pool.connect();
+    try {
+      const res = await client.query(
+        `insert into digital_deliveries (id, sale_id, invoice_number, channel, recipient, status, message_id, error_message, details)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
+        [
+          randomUUID(),
+          delivery.sale_id || null,
+          delivery.invoice_number,
+          delivery.channel,
+          delivery.recipient,
+          delivery.status,
+          delivery.message_id || null,
+          delivery.error || null,
+          delivery.details || null
+        ]
+      );
+      if (delivery.channel === "whatsapp") {
+        await client.query("update sales set whatsapp_status = $1 where invoice_number = $2 or id = $3", [delivery.status, delivery.invoice_number, delivery.sale_id]);
+      } else if (delivery.channel === "email") {
+        await client.query("update sales set email_status = $1 where invoice_number = $2 or id = $3", [delivery.status, delivery.invoice_number, delivery.sale_id]);
+      }
+      return res.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
+  async listDigitalDeliveries(query = {}) {
+    if (query.invoice_number) {
+      return this.many("select * from digital_deliveries where invoice_number = $1 order by created_at desc", [query.invoice_number]);
+    }
+    return this.many("select * from digital_deliveries order by created_at desc limit 100");
+  }
+
+  async listAuditLogs(invoiceNumber) {
+    if (invoiceNumber) {
+      return this.many("select * from invoice_audit_logs where invoice_number = $1 order by created_at desc", [invoiceNumber]);
+    }
+    return this.many("select * from invoice_audit_logs order by created_at desc limit 100");
   }
 
   async listPurchases(query = {}) {
@@ -329,9 +550,16 @@ export class PostgresStore {
     return { type, rows: await this.many(sql, values) };
   }
 
-  async nextInvoiceNumber(client) {
-    const result = await client.query("select count(*)::int as count from sales");
-    return `GST-${new Date().getFullYear()}-${String(result.rows[0].count + 1).padStart(5, "0")}`;
+  async nextInvoiceNumber(client, date = today()) {
+    const fy = getFinancialYear(date);
+    const result = await client.query(`
+      insert into invoice_sequences (financial_year, last_number, updated_at)
+      values ($1, 1, now())
+      on conflict (financial_year)
+      do update set last_number = invoice_sequences.last_number + 1, updated_at = now()
+      returning last_number
+    `, [fy]);
+    return formatInvoiceNumber(result.rows[0].last_number, fy, "SAG");
   }
 
   async one(sql, values = []) {
@@ -345,7 +573,20 @@ export class PostgresStore {
   }
 }
 
-const tables = new Set(["products", "customers", "suppliers", "payments", "stock_logs", "sales", "purchases", "purchase_items", "sale_items"]);
+const tables = new Set([
+  "products",
+  "customers",
+  "suppliers",
+  "payments",
+  "stock_logs",
+  "sales",
+  "purchases",
+  "purchase_items",
+  "sale_items",
+  "digital_deliveries",
+  "invoice_audit_logs",
+  "invoice_sequences"
+]);
 const searchColumns = {
   products: ["name", "brand", "category", "product_type", "batch_number", "supplier_name"],
   customers: ["name", "mobile", "village"],

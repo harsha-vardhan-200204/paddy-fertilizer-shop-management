@@ -5,6 +5,7 @@ import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
 import { round } from "../utils/reports.js";
 import { predictionEngine } from "../services/predictionEngine.js";
+import { getFinancialYear, formatInvoiceNumber, parseInvoiceNumber } from "../utils/invoiceNumber.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dataPath = path.resolve(__dirname, "../data/store.json");
@@ -23,7 +24,9 @@ const collections = [
   "farmer_credit_ledger",
   "credit_payments",
   "interest_history",
-  "stock_logs"
+  "stock_logs",
+  "digital_deliveries",
+  "invoice_audit_logs"
 ];
 
 export class FileStore {
@@ -263,44 +266,105 @@ export class FileStore {
     return { ...sale, items: this.db.sale_items.filter((item) => item.sale_id === sale.id) };
   }
 
+  getNextInvoiceNumber(dateInput = today()) {
+    const fy = getFinancialYear(dateInput);
+    this.db.invoice_sequences = this.db.invoice_sequences || {};
+    if (this.db.invoice_sequences[fy] === undefined) {
+      let maxSeq = 0;
+      for (const s of (this.db.sales || [])) {
+        const parsed = parseInvoiceNumber(s.invoice_number);
+        if (parsed && parsed.fy === fy && parsed.seq > maxSeq) {
+          maxSeq = parsed.seq;
+        }
+      }
+      this.db.invoice_sequences[fy] = maxSeq;
+    }
+    this.db.invoice_sequences[fy] += 1;
+    return formatInvoiceNumber(this.db.invoice_sequences[fy], fy, "SAG");
+  }
+
   async createSale(data, user) {
     const customer = data.customer_id ? await this.getById("customers", data.customer_id) : null;
+    const invNumber = data.invoice_number || this.getNextInvoiceNumber(data.date || today());
+    const grandTotal = Number(data.grand_total || 0);
+    const amountPaid = Number(data.amount_paid || 0);
+    const balanceDue = round(Math.max(0, grandTotal - amountPaid));
+    
+    let paymentStatus = "PAID";
+    if (balanceDue > 0 && amountPaid > 0) {
+      paymentStatus = "PARTIAL";
+    } else if (balanceDue > 0) {
+      paymentStatus = "CREDIT";
+    }
+
+    const creditDays = Number(data.credit_days || 30);
+    const interestRate = Number(data.interest_rate || 2);
+    const pDate = data.date || today();
+    const dueDate = data.due_date || new Date(new Date(pDate).getTime() + creditDays * 86400000).toISOString().slice(0, 10);
+
     const sale = {
       id: id(),
-      invoice_number: nextNumber("GST", this.db.sales.length + 1),
-      date: data.date || today(),
+      invoice_number: invNumber,
+      date: pDate,
       customer_id: data.customer_id || customer?.id || "",
       customer_name: data.customer_name || customer?.name || "",
       mobile: data.mobile || customer?.mobile || "",
+      customer_email: data.customer_email || data.email || customer?.email || "",
       village: data.village || customer?.village || "",
       billing_address: data.billing_address || customer?.address || "",
       gstin: data.gstin || "",
       customer_aadhaar: data.customer_aadhaar || data.aadhaar_number || customer?.aadhaar || "",
-      subtotal: data.subtotal,
-      cgst: data.cgst,
-      sgst: data.sgst,
-      grand_total: data.grand_total,
-      amount_paid: Number(data.amount_paid || 0),
-      balance_due: round(data.grand_total - Number(data.amount_paid || 0)),
+      subtotal: round(data.subtotal),
+      cgst: round(data.cgst),
+      sgst: round(data.sgst),
+      igst: round(data.igst || 0),
+      total_tax: round(data.total_tax || (Number(data.cgst || 0) + Number(data.sgst || 0) + Number(data.igst || 0))),
+      round_off: round(data.round_off || 0),
+      grand_total: grandTotal,
+      amount_paid: amountPaid,
+      balance_due: balanceDue,
       payment_method: data.payment_method || "Cash",
-      created_by: user?.name,
+      payment_status: paymentStatus,
+      status: "ISSUED",
+      is_interstate: Boolean(data.is_interstate),
+      state_of_supply: data.state_of_supply || "29 - Karnataka",
+      due_date: dueDate,
+      pdf_path: data.pdf_path || "",
+      whatsapp_status: "PENDING",
+      email_status: "PENDING",
+      created_by: user?.name || "Shop Admin",
       created_at: now()
     };
     this.db.sales.push(sale);
+
     for (const item of data.items || []) {
-      this.db.sale_items.push({ id: id(), sale_id: sale.id, ...item, created_at: now() });
+      this.db.sale_items.push({
+        id: id(),
+        sale_id: sale.id,
+        product_id: item.product_id,
+        product_name: item.product_name || item.name,
+        hsn_code: item.hsn_code,
+        unit: item.unit || "Bag",
+        qty: item.qty,
+        rate: item.rate,
+        discount: item.discount || 0,
+        taxable_amount: item.taxable_amount ?? (item.qty * item.rate - (item.discount || 0)),
+        gst_percent: item.gst_percent,
+        cgst: item.cgst || 0,
+        sgst: item.sgst || 0,
+        igst: item.igst || 0,
+        total: item.total,
+        created_at: now()
+      });
       await this.adjustStock(item.product_id, { qty: -Number(item.qty || 0), type: "sale", note: sale.invoice_number }, user);
     }
+
     if (sale.customer_id && sale.balance_due > 0) {
       const customerIndex = this.db.customers.findIndex((item) => item.id === sale.customer_id);
       if (customerIndex >= 0) {
         this.db.customers[customerIndex].pending_balance = round(Number(this.db.customers[customerIndex].pending_balance || 0) + sale.balance_due);
         this.db.customers[customerIndex].credit_amount = this.db.customers[customerIndex].pending_balance;
       }
-      const creditDays = Number(data.credit_days || 30);
-      const interestRate = Number(data.interest_rate || 2);
-      const pDate = sale.date || today();
-      const dueDate = new Date(new Date(pDate).getTime() + creditDays * 86400000).toISOString().slice(0, 10);
       this.db.farmer_credit_ledger = this.db.farmer_credit_ledger || [];
       this.db.farmer_credit_ledger.push({
         id: id(),
@@ -323,6 +387,7 @@ export class FileStore {
         created_at: now()
       });
     }
+
     if (sale.amount_paid > 0) {
       const paymentTime = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
       const payCount = (this.db.payments || []).length + 1;
@@ -352,8 +417,121 @@ export class FileStore {
         created_at: now()
       });
     }
+
+    // Record in audit log
+    this.db.invoice_audit_logs = this.db.invoice_audit_logs || [];
+    this.db.invoice_audit_logs.push({
+      id: id(),
+      invoice_number: sale.invoice_number,
+      action: "INVOICE_CREATED",
+      performed_by: user?.name || "Shop Admin",
+      reason: "Sale transaction recorded",
+      details: {
+        grand_total: sale.grand_total,
+        amount_paid: sale.amount_paid,
+        balance_due: sale.balance_due,
+        payment_status: paymentStatus
+      },
+      created_at: now()
+    });
+
     await this.persist();
     return this.getSale(sale.id);
+  }
+
+  async cancelSale(saleId, reason = "Cancelled by admin", user) {
+    const saleIndex = this.db.sales.findIndex(s => s.id === saleId || s.invoice_number === saleId);
+    if (saleIndex === -1) throw Object.assign(new Error("Invoice not found"), { status: 404 });
+    const sale = this.db.sales[saleIndex];
+    if (sale.status === "CANCELLED") throw Object.assign(new Error("Invoice is already cancelled"), { status: 400 });
+
+    sale.status = "CANCELLED";
+    sale.cancellation_reason = reason;
+    sale.cancelled_at = now();
+    sale.cancelled_by = user?.name || "Admin";
+    this.db.sales[saleIndex] = sale;
+
+    // Restore stock
+    const saleItems = this.db.sale_items.filter(item => item.sale_id === sale.id);
+    for (const item of saleItems) {
+      await this.adjustStock(item.product_id, {
+        qty: Number(item.qty || 0),
+        type: "sale_cancellation",
+        note: `Cancelled Invoice ${sale.invoice_number}`
+      }, user);
+    }
+
+    // Revert credit from customer pending balance
+    if (sale.customer_id && sale.balance_due > 0) {
+      const custIdx = this.db.customers.findIndex(c => c.id === sale.customer_id);
+      if (custIdx >= 0) {
+        this.db.customers[custIdx].pending_balance = Math.max(0, round(Number(this.db.customers[custIdx].pending_balance || 0) - sale.balance_due));
+        this.db.customers[custIdx].credit_amount = this.db.customers[custIdx].pending_balance;
+      }
+      if (this.db.farmer_credit_ledger) {
+        this.db.farmer_credit_ledger = this.db.farmer_credit_ledger.map(entry => {
+          if (entry.sale_id === sale.id || entry.invoice_id === sale.invoice_number) {
+            return { ...entry, status: "CANCELLED", outstanding_principal: 0, note: "Invoice cancelled" };
+          }
+          return entry;
+        });
+      }
+    }
+
+    this.db.invoice_audit_logs = this.db.invoice_audit_logs || [];
+    this.db.invoice_audit_logs.push({
+      id: id(),
+      invoice_number: sale.invoice_number,
+      action: "INVOICE_CANCELLED",
+      performed_by: user?.name || "Admin",
+      reason,
+      created_at: now()
+    });
+
+    await this.persist();
+    return this.getSale(sale.id);
+  }
+
+  async logDigitalDelivery(delivery) {
+    this.db.digital_deliveries = this.db.digital_deliveries || [];
+    const record = {
+      id: id(),
+      sale_id: delivery.sale_id || "",
+      invoice_number: delivery.invoice_number,
+      channel: delivery.channel,
+      recipient: delivery.recipient,
+      status: delivery.status,
+      message_id: delivery.message_id || "",
+      error_message: delivery.error || "",
+      details: delivery.details || "",
+      created_at: now()
+    };
+    this.db.digital_deliveries.push(record);
+
+    const sale = this.db.sales.find(s => s.id === delivery.sale_id || s.invoice_number === delivery.invoice_number);
+    if (sale) {
+      if (delivery.channel === "whatsapp") sale.whatsapp_status = delivery.status;
+      if (delivery.channel === "email") sale.email_status = delivery.status;
+    }
+
+    await this.persist();
+    return record;
+  }
+
+  async listDigitalDeliveries(query = {}) {
+    let list = this.db.digital_deliveries || [];
+    if (query.invoice_number) {
+      list = list.filter(d => d.invoice_number === query.invoice_number);
+    }
+    return list.slice().reverse();
+  }
+
+  async listAuditLogs(invoiceNumber) {
+    let list = this.db.invoice_audit_logs || [];
+    if (invoiceNumber) {
+      list = list.filter(l => l.invoice_number === invoiceNumber);
+    }
+    return list.slice().reverse();
   }
 
   async listPurchases(query = {}) {

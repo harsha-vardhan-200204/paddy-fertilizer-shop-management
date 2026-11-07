@@ -7,14 +7,18 @@ import {
   Building2,
   Download,
   FileSpreadsheet,
+  FileText,
   IndianRupee,
   LayoutDashboard,
   LogOut,
+  Mail,
   Menu,
+  MessageSquare,
   PackagePlus,
   Plus,
   Printer,
   ReceiptText,
+  RefreshCw,
   Save,
   Search,
   ShoppingCart,
@@ -31,6 +35,11 @@ import {
   Send,
   Copy,
   Check,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  Ban,
+  Eye,
   X
 } from "lucide-react";
 import {
@@ -140,8 +149,9 @@ function App() {
         <div className="w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 flex-1">
           <ErrorBoundary>
             {screen === "dashboard" && <Dashboard api={api} setScreen={setScreen} notify={setToast} />}
-            {screen === "products" && <Products api={api} notify={setToast} />}
             {screen === "billing" && <Billing api={api} notify={setToast} />}
+            {screen === "invoices" && <InvoiceManagement api={api} notify={setToast} user={session.user} setScreen={setScreen} />}
+            {screen === "products" && <Products api={api} notify={setToast} />}
             {screen === "purchases" && <Purchases api={api} notify={setToast} user={session.user} />}
             {screen === "customers" && <Customers api={api} notify={setToast} />}
             {screen === "suppliers" && <Suppliers api={api} notify={setToast} />}
@@ -285,6 +295,7 @@ function Sidebar({ screen, setScreen, user, logout, isOpen, onClose }) {
   const items = [
     ["dashboard", LayoutDashboard, "Dashboard"],
     ["billing", ReceiptText, "Sales Billing"],
+    ["invoices", FileText, "Invoices & Delivery"],
     ["products", Boxes, "Products"],
     ["purchases", PackagePlus, "Purchases"],
     ["customers", UserRound, "Farmers"],
@@ -347,8 +358,9 @@ function Sidebar({ screen, setScreen, user, logout, isOpen, onClose }) {
 function Header({ screen, onToggleSidebar }) {
   const titles = {
     dashboard: "Dashboard",
-    products: "Product Management",
     billing: "Sales Billing",
+    invoices: "GST Invoices & Digital Delivery Management",
+    products: "Product Management",
     purchases: "Purchase Management",
     customers: "Farmer Records",
     suppliers: "Supplier Management",
@@ -1226,16 +1238,21 @@ function Billing({ api, notify }) {
   return (
     <div className="grid grid-cols-1 xl:grid-cols-[1fr_420px] gap-6">
       <Panel title="New GST Invoice">
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           <Select label="Existing Farmer" value={form.customer_id} options={["", ...customers.map((c) => c.id)]} labels={{ "": "Walk-in customer", ...Object.fromEntries(customers.map((c) => [c.id, `${c.name} - ${c.mobile}`])) }} onChange={(customer_id) => {
             const c = customers.find((customer) => customer.id === customer_id);
-            setForm({ ...form, customer_id, customer_name: c?.name || "", mobile: c?.mobile || "", village: c?.village || "", billing_address: c?.address || "", customer_aadhaar: c?.aadhaar_number || c?.aadhaar || "" });
+            setForm({ ...form, customer_id, customer_name: c?.name || "", mobile: c?.mobile || "", customer_email: c?.email || "", village: c?.village || "", billing_address: c?.address || "", customer_aadhaar: c?.aadhaar_number || c?.aadhaar || "" });
           }} />
           <Input label="Farmer Name" value={form.customer_name} onChange={(customer_name) => setForm({ ...form, customer_name })} />
           <Input label="Mobile" value={form.mobile} onChange={(mobile) => setForm({ ...form, mobile })} />
+          <Input label="Email (for PDF invoice)" value={form.customer_email || ""} onChange={(customer_email) => setForm({ ...form, customer_email })} placeholder="farmer@example.com" />
           <Input label="Village" value={form.village} onChange={(village) => setForm({ ...form, village })} />
           <Input label="Billing Address" value={form.billing_address} onChange={(billing_address) => setForm({ ...form, billing_address })} />
-          <Input label="DBT / Farmer ID" value={form.gstin} onChange={(gstin) => setForm({ ...form, gstin })} />
+          <Input label="DBT / GSTIN / ID" value={form.gstin} onChange={(gstin) => setForm({ ...form, gstin })} />
+          <div className="flex items-center gap-2 mt-6 sm:mt-7">
+            <input type="checkbox" id="interstate_sale" checked={Boolean(form.is_interstate)} onChange={e => setForm({ ...form, is_interstate: e.target.checked })} className="h-4 w-4 rounded text-paddy-600 focus:ring-paddy-500 cursor-pointer" />
+            <label htmlFor="interstate_sale" className="text-xs font-semibold text-slate-700 cursor-pointer">Inter-State Sale (IGST)</label>
+          </div>
         </div>
         <div className="mt-5 overflow-x-auto rounded-md border border-slate-200 custom-scrollbar">
           <table className="w-full text-sm">
@@ -1465,7 +1482,7 @@ function Billing({ api, notify }) {
           </div>
         </div>
       </Panel>
-      <InvoicePreview shop={shop} invoice={invoice || { ...form, items: lines, subtotal, cgst, sgst, grand_total: grand, balance_due: grand - Number(form.amount_paid || 0), invoice_number: "Draft", date: new Date().toISOString().slice(0, 10) }} />
+      <InvoicePreview shop={shop} invoice={invoice || { ...form, items: lines, subtotal, cgst, sgst, grand_total: grand, balance_due: grand - Number(form.amount_paid || 0), invoice_number: "Draft", date: new Date().toISOString().slice(0, 10) }} api={api} notify={notify} />
     </div>
   );
   function updateLine(index, patch) {
@@ -1473,19 +1490,68 @@ function Billing({ api, notify }) {
   }
 }
 
-function InvoicePreview({ shop, invoice }) {
-  const sendWhatsApp = () => {
+function InvoicePreview({ shop, invoice, api, notify }) {
+  const [sending, setSending] = useState(false);
+
+  const downloadPdf = () => {
+    if (!invoice?.id) {
+      notify("Please generate/save the invoice first before downloading official PDF.");
+      return;
+    }
+    const safeInv = (invoice.invoice_number || `INV-${invoice.id}`).replace(/[\/\\?%*:|"<>]/g, "-");
+    const link = document.createElement("a");
+    link.href = `/api/invoices/${invoice.id}/pdf`;
+    link.download = `${safeInv}.pdf`;
+    link.target = "_blank";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    notify("Downloading official A4 GST Tax Invoice PDF...");
+  };
+
+  const sendWhatsApp = async () => {
     const mobile = invoice.mobile?.replace(/\D/g, "") || "";
     const farmerName = invoice.customer_name || "Valued Farmer";
     const invNo = invoice.invoice_number || "Draft";
     const invDate = invoice.date || new Date().toISOString().slice(0, 10);
     const shopName = shop.name || "SRI ANJANEYA AGRO AGENCIES";
+
+    if (invoice?.id && api) {
+      setSending(true);
+      try {
+        await api.post(`/invoices/${invoice.id}/retry-delivery`, { channel: "whatsapp" });
+        notify("WhatsApp Digital Invoice dispatched successfully!");
+      } catch (err) {
+        console.warn("Backend WhatsApp retry:", err);
+      } finally {
+        setSending(false);
+      }
+    }
+
     const itemsList = (invoice.items || [])
       .map((it, idx) => `${idx + 1}. ${it.product_name || it.product?.name || "Agro Item"} (Qty: ${it.qty}) - ₹${Number(it.total || 0).toFixed(2)}`)
       .join("\n");
-    const text = `🌾 *${shopName}*\n*GST Invoice Receipt*\n----------------------------------------\n*Invoice No:* ${invNo}\n*Date:* ${invDate}\n*Farmer:* ${farmerName}\n*Mobile:* ${mobile || "-"}\n*Payment Mode:* ${invoice.payment_method || "Cash"}\n----------------------------------------\n*Items Purchased:*\n${itemsList}\n----------------------------------------\n*Subtotal:* ₹${Number(invoice.subtotal || 0).toFixed(2)}\n*CGST:* ₹${Number(invoice.cgst || 0).toFixed(2)}\n*SGST:* ₹${Number(invoice.sgst || 0).toFixed(2)}\n*Grand Total: ₹${Number(invoice.grand_total || 0).toFixed(2)}*\n*Amount Paid:* ₹${Number(invoice.amount_paid || 0).toFixed(2)}\n*Balance Due:* ₹${Number(invoice.balance_due || 0).toFixed(2)}\n----------------------------------------\nThank you for visiting ${shopName}! For queries call ${shop.phone || "9900389992"}.`;
+    const text = `🌾 *${shopName}*\n*OFFICIAL GST TAX INVOICE*\n----------------------------------------\n*Invoice No:* ${invNo}\n*Date:* ${invDate}\n*Customer:* ${farmerName}\n*Mobile:* ${mobile || "-"}\n*Payment Mode:* ${invoice.payment_method || "Cash"}\n----------------------------------------\n*Items Purchased:*\n${itemsList}\n----------------------------------------\n*Taxable Subtotal:* ₹${Number(invoice.subtotal || 0).toFixed(2)}\n*CGST:* ₹${Number(invoice.cgst || 0).toFixed(2)}\n*SGST:* ₹${Number(invoice.sgst || 0).toFixed(2)}\n*Grand Total: ₹${Number(invoice.grand_total || 0).toFixed(2)}*\n*Amount Paid:* ₹${Number(invoice.amount_paid || 0).toFixed(2)}\n*Balance Due:* ₹${Number(invoice.balance_due || 0).toFixed(2)}\n----------------------------------------\nThank you for choosing ${shopName}! Helpline: ${shop.phone || "9900389992"}.`;
     const phone = mobile ? (mobile.length === 10 ? `91${mobile}` : mobile) : "";
     window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`, "_blank");
+  };
+
+  const sendEmail = async () => {
+    if (!invoice?.id) {
+      notify("Please save the invoice before sending email.");
+      return;
+    }
+    const targetEmail = invoice.customer_email || invoice.email || prompt("Enter farmer / customer email address:", "farmer@example.com");
+    if (!targetEmail) return;
+    setSending(true);
+    try {
+      await api.post(`/invoices/${invoice.id}/retry-delivery`, { channel: "email", email: targetEmail });
+      notify(`GST Invoice PDF emailed to ${targetEmail}!`);
+    } catch (err) {
+      notify("Email delivery failed: " + (err.message || "Error"));
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -1503,7 +1569,8 @@ function InvoicePreview({ shop, invoice }) {
           <span className="text-right">Mobile: <b>{invoice.mobile || "-"}</b></span>
           <span>Payment: <b>{invoice.payment_method || "Cash"}</b></span>
           <span className="text-right">GSTIN: <b>{invoice.gstin || "-"}</b></span>
-          <span>Aadhaar: <b>{invoice.customer_aadhaar ? `XXXX XXXX ${invoice.customer_aadhaar.replace(/\D/g, "").slice(-4)}` : "-"}</b></span>
+          <span>Aadhaar: <b>{invoice.customer_aadhaar ? `XXXX XXXX ${String(invoice.customer_aadhaar).replace(/\D/g, "").slice(-4)}` : "-"}</b></span>
+          <span className="text-right">Supply: <b>{invoice.is_interstate ? "Inter-State (IGST)" : "Intra-State (Karnataka)"}</b></span>
         </div>
         <table className="mt-3 w-full text-xs">
           <thead><tr><th>Item</th><th>Qty</th><th>Rate</th><th>Tax</th><th>Total</th></tr></thead>
@@ -1511,20 +1578,901 @@ function InvoicePreview({ shop, invoice }) {
         </table>
         <div className="mt-4 ml-auto w-56 space-y-1 text-sm">
           <Row label="Subtotal" value={currency.format(invoice.subtotal || 0)} />
-          <Row label="CGST" value={currency.format(invoice.cgst || 0)} />
-          <Row label="SGST" value={currency.format(invoice.sgst || 0)} />
+          {invoice.is_interstate ? (
+            <Row label="IGST" value={currency.format(invoice.igst || invoice.total_tax || 0)} />
+          ) : (
+            <>
+              <Row label="CGST" value={currency.format(invoice.cgst || 0)} />
+              <Row label="SGST" value={currency.format(invoice.sgst || 0)} />
+            </>
+          )}
           <Row label="Grand Total" value={currency.format(invoice.grand_total || 0)} strong />
           <Row label="Paid" value={currency.format(invoice.amount_paid || 0)} />
           <Row label="Balance" value={currency.format(invoice.balance_due || 0)} strong />
         </div>
       </div>
       <div className="mt-5 space-y-2">
-        <button onClick={() => window.print()} className="btn w-full"><Printer className="h-5 w-5" /> Print / Save PDF</button>
-        <button onClick={sendWhatsApp} className="btn-secondary w-full bg-emerald-600 hover:bg-emerald-700 text-white border-none font-semibold flex items-center justify-center gap-2 py-2.5">
-          💬 Send GST Invoice via WhatsApp
+        <button onClick={downloadPdf} className="btn w-full bg-paddy-700 hover:bg-paddy-800 text-white flex items-center justify-center gap-2">
+          <Download className="h-5 w-5" /> Download Official A4 GST PDF
         </button>
+        <button onClick={() => window.print()} className="btn-secondary w-full flex items-center justify-center gap-2">
+          <Printer className="h-5 w-5" /> Print / Thermal Preview
+        </button>
+        <div className="grid grid-cols-2 gap-2 pt-1">
+          <button onClick={sendWhatsApp} disabled={sending} className="btn-secondary bg-emerald-600 hover:bg-emerald-700 text-white border-none font-semibold flex items-center justify-center gap-1.5 py-2 text-xs">
+            <MessageSquare className="h-4 w-4" /> WhatsApp
+          </button>
+          <button onClick={sendEmail} disabled={sending} className="btn-secondary bg-sky-600 hover:bg-sky-700 text-white border-none font-semibold flex items-center justify-center gap-1.5 py-2 text-xs">
+            <Mail className="h-4 w-4" /> Email PDF
+          </button>
+        </div>
       </div>
     </Panel>
+  );
+}
+
+function InvoiceManagement({ api, notify, user, setScreen }) {
+  const isAdmin = user?.role === "admin" || user?.role === "owner";
+  const [sales, setSales] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [deliveries, setDeliveries] = useState([]);
+  const [activeTab, setActiveTab] = useState("invoices"); // invoices | reminders | logs
+  const [search, setSearch] = useState("");
+  const [paymentFilter, setPaymentFilter] = useState("");
+  const [deliveryFilter, setDeliveryFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [viewingInvoice, setViewingInvoice] = useState(null);
+  const [cancellingInvoice, setCancellingInvoice] = useState(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [emailModalInvoice, setEmailModalInvoice] = useState(null);
+  const [recipientEmail, setRecipientEmail] = useState("");
+
+  const loadData = () => {
+    api.get("/sales").then((data) => setSales(Array.isArray(data) ? data : [])).catch(console.error);
+    api.get("/customers").then((data) => setCustomers(Array.isArray(data) ? data : [])).catch(console.error);
+    api.get("/invoices/deliveries").then((data) => setDeliveries(Array.isArray(data) ? data : [])).catch(() => setDeliveries([]));
+  };
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const filteredSales = useMemo(() => {
+    return sales.filter((s) => {
+      const q = search.toLowerCase();
+      const matchSearch =
+        !q ||
+        String(s.invoice_number || "").toLowerCase().includes(q) ||
+        String(s.customer_name || "").toLowerCase().includes(q) ||
+        String(s.mobile || "").toLowerCase().includes(q);
+
+      const isCanc = s.status === "CANCELLED";
+      let matchPay = true;
+      if (paymentFilter === "CANCELLED") matchPay = isCanc;
+      else if (paymentFilter === "PAID") matchPay = !isCanc && (s.payment_status === "PAID" || Number(s.balance_due || 0) <= 0);
+      else if (paymentFilter === "PARTIAL") matchPay = !isCanc && (s.payment_status === "PARTIAL" || (Number(s.amount_paid || 0) > 0 && Number(s.balance_due || 0) > 0));
+      else if (paymentFilter === "CREDIT") matchPay = !isCanc && (s.payment_status === "CREDIT" || (Number(s.amount_paid || 0) === 0 && Number(s.balance_due || 0) > 0));
+
+      const matchDel =
+        !deliveryFilter ||
+        (deliveryFilter === "whatsapp_sent" && (s.whatsapp_status === "DELIVERED" || s.whatsapp_status === "SIMULATED_SENT")) ||
+        (deliveryFilter === "email_sent" && (s.email_status === "DELIVERED" || s.email_status === "SIMULATED_SENT")) ||
+        (deliveryFilter === "failed" && (s.whatsapp_status === "FAILED" || s.email_status === "FAILED"));
+
+      const sDate = s.date || (s.created_at ? s.created_at.slice(0, 10) : "");
+      const matchFrom = !dateFrom || sDate >= dateFrom;
+      const matchTo = !dateTo || sDate <= dateTo;
+
+      return matchSearch && matchPay && matchDel && matchFrom && matchTo;
+    });
+  }, [sales, search, paymentFilter, deliveryFilter, dateFrom, dateTo]);
+
+  const metrics = useMemo(() => {
+    const active = sales.filter((s) => s.status !== "CANCELLED");
+    const totalBilled = active.reduce((sum, s) => sum + Number(s.grand_total || 0), 0);
+    const totalPaid = active.reduce((sum, s) => sum + Number(s.amount_paid || 0), 0);
+    const totalDue = active.reduce((sum, s) => sum + Number(s.balance_due || 0), 0);
+    const cancelledCount = sales.filter((s) => s.status === "CANCELLED").length;
+    return {
+      totalCount: sales.length,
+      activeCount: active.length,
+      totalBilled,
+      totalPaid,
+      totalDue,
+      cancelledCount
+    };
+  }, [sales]);
+
+  const creditReminders = useMemo(() => {
+    const todayMs = Date.now();
+    return sales
+      .filter((s) => s.status !== "CANCELLED" && Number(s.balance_due || 0) > 0)
+      .map((s) => {
+        const pDate = new Date(s.date || s.created_at || Date.now());
+        const daysElapsed = Math.max(0, Math.floor((todayMs - pDate.getTime()) / 86400000));
+        const dueDays = Number(s.credit_due_days || 30);
+        const overdueDays = Math.max(0, daysElapsed - dueDays);
+        const months = daysElapsed / 30;
+        const interestRate = Number(s.interest_rate || 2);
+        const principal = Number(s.balance_due || 0);
+        const interest = Math.round(principal * (interestRate / 100) * months * 100) / 100;
+        const totalOutstanding = Math.round((principal + interest) * 100) / 100;
+
+        return {
+          sale: s,
+          customer_name: s.customer_name || "Valued Farmer",
+          mobile: s.mobile || "",
+          village: s.village || "",
+          invoice_number: s.invoice_number,
+          purchase_date: s.date || "",
+          due_date: s.due_date || new Date(pDate.getTime() + dueDays * 86400000).toISOString().slice(0, 10),
+          daysElapsed,
+          overdueDays,
+          principal,
+          interestRate,
+          interest,
+          totalOutstanding
+        };
+      })
+      .sort((a, b) => b.overdueDays - a.overdueDays);
+  }, [sales]);
+
+  const handleDownloadPdf = (sale) => {
+    const safeInv = (sale.invoice_number || `INV-${sale.id}`).replace(/[\/\\?%*:|"<>]/g, "-");
+    const link = document.createElement("a");
+    link.href = `/api/invoices/${sale.id}/pdf`;
+    link.download = `${safeInv}.pdf`;
+    link.target = "_blank";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    notify(`Downloading GST Tax Invoice ${sale.invoice_number}...`);
+  };
+
+  const handleRetry = async (sale, channel) => {
+    try {
+      notify(`Dispatching invoice via ${channel === "whatsapp" ? "WhatsApp Cloud API" : "Email"}...`);
+      await api.post(`/invoices/${sale.id}/retry-delivery`, { channel });
+      notify(`Digital delivery sent successfully for ${sale.invoice_number}!`);
+      loadData();
+    } catch (err) {
+      notify("Delivery failed: " + (err.message || "Error"));
+    }
+  };
+
+  const handleSendCustomEmail = async () => {
+    if (!emailModalInvoice) return;
+    if (!recipientEmail || !recipientEmail.includes("@")) {
+      notify("Please enter a valid email address.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await api.post(`/invoices/${emailModalInvoice.id}/retry-delivery`, { channel: "email", email: recipientEmail });
+      notify(`Invoice PDF successfully emailed to ${recipientEmail}!`);
+      setEmailModalInvoice(null);
+      setRecipientEmail("");
+      loadData();
+    } catch (err) {
+      notify("Email dispatch failed: " + (err.message || "Error"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSendReminder = async (item) => {
+    try {
+      notify(`Sending payment reminder to ${item.customer_name}...`);
+      await api.post("/invoices/send-reminder", {
+        customer: { name: item.customer_name, mobile: item.mobile },
+        overdueDays: item.overdueDays,
+        principalAmount: item.principal,
+        accruedInterest: item.interest,
+        totalDue: item.totalOutstanding,
+        invoiceNo: item.invoice_number
+      });
+      notify(`Reminder dispatched to ${item.customer_name} (${item.mobile})!`);
+      loadData();
+    } catch (err) {
+      notify("Reminder failed: " + (err.message || "Error"));
+    }
+  };
+
+  const handleConfirmCancel = async () => {
+    if (!cancellingInvoice) return;
+    if (!cancelReason.trim()) {
+      notify("Please provide a reason for cancelling this GST invoice.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await api.post(`/invoices/${cancellingInvoice.id}/cancel`, { reason: cancelReason.trim() });
+      notify(`Invoice ${cancellingInvoice.invoice_number} cancelled. Stock restored and credit ledger reversed.`);
+      setCancellingInvoice(null);
+      setCancelReason("");
+      loadData();
+    } catch (err) {
+      notify("Cancellation failed: " + (err.message || "Error"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Top Banner & Action */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+        <div>
+          <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+            <FileText className="h-6 w-6 text-paddy-700" />
+            Automatic GST Invoices & Digital Delivery Management
+          </h2>
+          <p className="text-xs sm:text-sm text-slate-500 mt-1">
+            Compliant CBIC Sequential Numbering (SAG/YYYY-YY/NNN), Meta WhatsApp Cloud API & Nodemailer SMTP Delivery.
+          </p>
+        </div>
+        <button
+          onClick={() => setScreen("billing")}
+          className="btn bg-paddy-700 hover:bg-paddy-800 text-white flex items-center gap-2 text-sm shadow-sm shrink-0"
+        >
+          <ReceiptText className="h-4 w-4" /> Create New GST Sale
+        </button>
+      </div>
+
+      {/* Metric Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Invoices Issued</p>
+          <p className="text-2xl font-black text-slate-900 mt-1">{metrics.activeCount}</p>
+          <p className="text-xs text-slate-400 mt-1">{metrics.cancelledCount} cancelled</p>
+        </div>
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total Sales Billed</p>
+          <p className="text-2xl font-black text-paddy-800 mt-1">{currency.format(metrics.totalBilled)}</p>
+          <p className="text-xs text-emerald-600 font-medium mt-1">GST Tax Included</p>
+        </div>
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Amount Collected</p>
+          <p className="text-2xl font-black text-emerald-700 mt-1">{currency.format(metrics.totalPaid)}</p>
+          <p className="text-xs text-slate-400 mt-1">Cash, UPI & Card settlements</p>
+        </div>
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Credit Outstanding</p>
+          <p className="text-2xl font-black text-amber-700 mt-1">{currency.format(metrics.totalDue)}</p>
+          <p className="text-xs text-amber-600 font-medium mt-1">{creditReminders.length} credit accounts</p>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex border-b border-slate-200 bg-white px-4 rounded-t-xl">
+        <button
+          onClick={() => setActiveTab("invoices")}
+          className={`py-3.5 px-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${
+            activeTab === "invoices"
+              ? "border-paddy-700 text-paddy-800"
+              : "border-transparent text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          <ReceiptText className="h-4 w-4" /> All GST Invoices ({filteredSales.length})
+        </button>
+        <button
+          onClick={() => setActiveTab("reminders")}
+          className={`py-3.5 px-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${
+            activeTab === "reminders"
+              ? "border-amber-600 text-amber-800"
+              : "border-transparent text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          <Bell className="h-4 w-4" /> Payment Reminders ({creditReminders.length})
+        </button>
+        <button
+          onClick={() => setActiveTab("logs")}
+          className={`py-3.5 px-4 font-bold text-sm border-b-2 flex items-center gap-2 transition-colors ${
+            activeTab === "logs"
+              ? "border-paddy-700 text-paddy-800"
+              : "border-transparent text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          <Clock className="h-4 w-4" /> Delivery Logs & Audit Trail ({deliveries.length})
+        </button>
+      </div>
+
+      {/* TAB 1: ALL INVOICES */}
+      {activeTab === "invoices" && (
+        <div className="space-y-4">
+          {/* Filter Bar */}
+          <div className="bg-white p-4 rounded-b-xl border border-t-0 border-slate-200 shadow-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
+            <div>
+              <label className="text-xs font-bold text-slate-600 mb-1 block">Search Invoices</label>
+              <div className="flex h-10 items-center gap-2 rounded-md border border-slate-200 px-3 bg-white">
+                <Search className="h-4 w-4 text-slate-400 shrink-0" />
+                <input
+                  className="outline-none w-full text-xs"
+                  placeholder="Invoice No, Farmer, Mobile"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-600 mb-1 block">Payment Status</label>
+              <select
+                className="h-10 w-full rounded-md border border-slate-200 px-3 text-xs outline-none bg-white"
+                value={paymentFilter}
+                onChange={(e) => setPaymentFilter(e.target.value)}
+              >
+                <option value="">All Payment Statuses</option>
+                <option value="PAID">Fully Paid</option>
+                <option value="PARTIAL">Partially Paid</option>
+                <option value="CREDIT">Credit (Udhaari)</option>
+                <option value="CANCELLED">Cancelled Invoices</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-600 mb-1 block">Digital Delivery</label>
+              <select
+                className="h-10 w-full rounded-md border border-slate-200 px-3 text-xs outline-none bg-white"
+                value={deliveryFilter}
+                onChange={(e) => setDeliveryFilter(e.target.value)}
+              >
+                <option value="">All Delivery Statuses</option>
+                <option value="whatsapp_sent">WhatsApp Dispatched</option>
+                <option value="email_sent">Email Dispatched</option>
+                <option value="failed">Delivery Failed</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-600 mb-1 block">From Date</label>
+              <input
+                type="date"
+                className="h-10 w-full rounded-md border border-slate-200 px-3 text-xs outline-none bg-white"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="text-xs font-bold text-slate-600 mb-1 block">To Date</label>
+              <input
+                type="date"
+                className="h-10 w-full rounded-md border border-slate-200 px-3 text-xs outline-none bg-white"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Invoices Table */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-left">
+                  <tr>
+                    <th className="py-3 px-3">Invoice No</th>
+                    <th className="py-3 px-3">Date</th>
+                    <th className="py-3 px-3">Customer / Farmer</th>
+                    <th className="py-3 px-3 text-right">Grand Total</th>
+                    <th className="py-3 px-3 text-right">Paid / Balance</th>
+                    <th className="py-3 px-3 text-center">Payment</th>
+                    <th className="py-3 px-3 text-center">Digital Delivery</th>
+                    <th className="py-3 px-3 text-center">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredSales.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-10 text-center text-slate-400">
+                        No GST invoices found matching your filters.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredSales.map((sale) => {
+                      const isCancelled = sale.status === "CANCELLED";
+                      const bal = Number(sale.balance_due || 0);
+                      const paid = Number(sale.amount_paid || 0);
+
+                      return (
+                        <tr
+                          key={sale.id}
+                          className={`hover:bg-slate-50/80 transition-colors ${
+                            isCancelled ? "bg-slate-50/60 opacity-70" : ""
+                          }`}
+                        >
+                          <td className="py-3 px-3 font-mono font-bold">
+                            <span className={isCancelled ? "line-through text-slate-400" : "text-paddy-900"}>
+                              {sale.invoice_number}
+                            </span>
+                            {isCancelled && (
+                              <span className="ml-1.5 inline-block text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded font-bold">
+                                VOID
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-slate-600 whitespace-nowrap">
+                            {sale.date || (sale.created_at ? sale.created_at.slice(0, 10) : "-")}
+                          </td>
+                          <td className="py-3 px-3">
+                            <p className="font-semibold text-slate-800">{sale.customer_name || "Walk-in"}</p>
+                            <p className="text-[11px] text-slate-500">{sale.mobile || "-"}</p>
+                          </td>
+                          <td className="py-3 px-3 text-right font-bold text-slate-900">
+                            {currency.format(sale.grand_total || 0)}
+                          </td>
+                          <td className="py-3 px-3 text-right whitespace-nowrap">
+                            <span className="text-emerald-700 font-semibold">{currency.format(paid)}</span>
+                            {bal > 0 && (
+                              <span className="text-red-600 font-semibold block text-[11px]">
+                                Due: {currency.format(bal)}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            {isCancelled ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-700">
+                                Cancelled
+                              </span>
+                            ) : bal <= 0 ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                                Fully Paid
+                              </span>
+                            ) : paid > 0 ? (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                                Partial Due
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-800">
+                                Credit (Udhaari)
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <div className="flex items-center justify-center gap-1.5">
+                              {/* WhatsApp badge */}
+                              <span
+                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                  sale.whatsapp_status === "DELIVERED"
+                                    ? "bg-emerald-100 text-emerald-800"
+                                    : sale.whatsapp_status === "SIMULATED_SENT"
+                                    ? "bg-sky-100 text-sky-800"
+                                    : sale.whatsapp_status === "FAILED"
+                                    ? "bg-red-100 text-red-700"
+                                    : "bg-slate-100 text-slate-600"
+                                }`}
+                                title={`WhatsApp: ${sale.whatsapp_status || "Pending"}`}
+                              >
+                                <MessageSquare className="h-3 w-3" />
+                                {sale.whatsapp_status === "DELIVERED" ? "Sent" : sale.whatsapp_status === "SIMULATED_SENT" ? "Demo" : "WA"}
+                              </span>
+                              {/* Email badge */}
+                              <span
+                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                  sale.email_status === "DELIVERED"
+                                    ? "bg-emerald-100 text-emerald-800"
+                                    : sale.email_status === "SIMULATED_SENT"
+                                    ? "bg-sky-100 text-sky-800"
+                                    : sale.email_status === "FAILED"
+                                    ? "bg-red-100 text-red-700"
+                                    : "bg-slate-100 text-slate-600"
+                                }`}
+                                title={`Email: ${sale.email_status || "Pending"}`}
+                              >
+                                <Mail className="h-3 w-3" />
+                                {sale.email_status === "DELIVERED" ? "Sent" : sale.email_status === "SIMULATED_SENT" ? "Demo" : "Email"}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <div className="flex items-center justify-center gap-1">
+                              {/* Download PDF */}
+                              <button
+                                onClick={() => handleDownloadPdf(sale)}
+                                className="p-1 rounded bg-slate-100 hover:bg-paddy-100 text-slate-700 hover:text-paddy-800"
+                                title="Download Official A4 GST PDF"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                              </button>
+                              {/* View / Print */}
+                              <button
+                                onClick={() => setViewingInvoice(sale)}
+                                className="p-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700"
+                                title="View / Print Invoice"
+                              >
+                                <Eye className="h-3.5 w-3.5" />
+                              </button>
+                              {/* Resend WhatsApp */}
+                              <button
+                                onClick={() => handleRetry(sale, "whatsapp")}
+                                className="p-1 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700"
+                                title="Resend WhatsApp Invoice"
+                              >
+                                <MessageSquare className="h-3.5 w-3.5" />
+                              </button>
+                              {/* Send / Resend Email */}
+                              <button
+                                onClick={() => {
+                                  setEmailModalInvoice(sale);
+                                  setRecipientEmail(sale.customer_email || sale.email || "");
+                                }}
+                                className="p-1 rounded bg-sky-50 hover:bg-sky-100 text-sky-700"
+                                title="Email PDF Invoice"
+                              >
+                                <Mail className="h-3.5 w-3.5" />
+                              </button>
+                              {/* Cancel Invoice */}
+                              {isAdmin && !isCancelled && (
+                                <button
+                                  onClick={() => {
+                                    setCancellingInvoice(sale);
+                                    setCancelReason("");
+                                  }}
+                                  className="p-1 rounded bg-red-50 hover:bg-red-100 text-red-600"
+                                  title="Cancel GST Invoice (Audit Required)"
+                                >
+                                  <Ban className="h-3.5 w-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: PAYMENT REMINDERS */}
+      {activeTab === "reminders" && (
+        <div className="space-y-4">
+          <div className="bg-amber-50 p-4 rounded-xl border border-amber-200 flex items-start gap-3">
+            <Bell className="h-5 w-5 text-amber-700 mt-0.5 shrink-0" />
+            <div className="text-xs text-amber-950">
+              <p className="font-bold text-sm text-amber-900">Automated Khata Credit Reminders</p>
+              <p className="mt-0.5">
+                Displays farmers with outstanding product balances. Interest is calculated @ <strong>2% per month</strong> from the original purchase date. One-click reminder dispatches an approved WhatsApp notification.
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-left">
+                  <tr>
+                    <th className="py-3 px-3">Farmer Name</th>
+                    <th className="py-3 px-3">Mobile / Village</th>
+                    <th className="py-3 px-3">Invoice Ref</th>
+                    <th className="py-3 px-3">Purchase Date</th>
+                    <th className="py-3 px-3">Due Date</th>
+                    <th className="py-3 px-3 text-right">Principal Due</th>
+                    <th className="py-3 px-3 text-right">Accrued Interest</th>
+                    <th className="py-3 px-3 text-right">Total Outstanding</th>
+                    <th className="py-3 px-3 text-center">Status</th>
+                    <th className="py-3 px-3 text-center">Quick Dispatch</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {creditReminders.length === 0 ? (
+                    <tr>
+                      <td colSpan={10} className="py-10 text-center text-slate-400">
+                        🎉 Excellent! All customer credit accounts are fully cleared. No overdue balances.
+                      </td>
+                    </tr>
+                  ) : (
+                    creditReminders.map((item, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                        <td className="py-3 px-3 font-bold text-slate-900">{item.customer_name}</td>
+                        <td className="py-3 px-3 text-slate-600">
+                          <p>{item.mobile || "-"}</p>
+                          <p className="text-[11px] text-slate-400">{item.village || ""}</p>
+                        </td>
+                        <td className="py-3 px-3 font-mono font-bold text-paddy-800">{item.invoice_number}</td>
+                        <td className="py-3 px-3 text-slate-600">{item.purchase_date}</td>
+                        <td className="py-3 px-3 text-slate-600">{item.due_date}</td>
+                        <td className="py-3 px-3 text-right font-bold text-slate-800">
+                          {currency.format(item.principal)}
+                        </td>
+                        <td className="py-3 px-3 text-right text-amber-700 font-semibold">
+                          +{currency.format(item.interest)}
+                          <span className="block text-[10px] text-slate-400">({item.daysElapsed}d @ 2%/mo)</span>
+                        </td>
+                        <td className="py-3 px-3 text-right font-black text-red-600 text-sm">
+                          {currency.format(item.totalOutstanding)}
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          {item.overdueDays > 0 ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-800">
+                              {item.overdueDays}d Overdue
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                              Due Soon
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => handleSendReminder(item)}
+                              className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-semibold flex items-center gap-1 shadow-sm"
+                              title="Send automated reminder via Meta Cloud API"
+                            >
+                              <MessageSquare className="h-3 w-3" /> Remind
+                            </button>
+                            {item.mobile && (
+                              <button
+                                onClick={() => {
+                                  const phone = item.mobile.replace(/\D/g, "");
+                                  const cleanPhone = phone.length === 10 ? `91${phone}` : phone;
+                                  const text = `Namaskara ${item.customer_name} avare, friendly reminder from SRI ANJANEYA AGRO AGENCIES. Pending credit invoice ${item.invoice_number}: Principal ₹${item.principal.toFixed(2)}, Accrued Interest ₹${item.interest.toFixed(2)}, Total Due ₹${item.totalOutstanding.toFixed(2)}. UPI: 9900389992@sbi. Helpline: 9900389992.`;
+                                  window.open(`https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`, "_blank");
+                                }}
+                                className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium"
+                                title="Open WhatsApp Web directly"
+                              >
+                                Web
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: DIGITAL DELIVERY LOGS & AUDIT TRAIL */}
+      {activeTab === "logs" && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="p-4 border-b border-slate-200 flex justify-between items-center">
+            <h3 className="font-bold text-slate-800 flex items-center gap-2">
+              <Clock className="h-5 w-5 text-paddy-700" /> Digital Invoice Dispatches & System Audit Logs
+            </h3>
+            <button onClick={loadData} className="icon-btn" title="Refresh Logs">
+              <RefreshCw className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-left">
+                <tr>
+                  <th className="py-3 px-3">Timestamp</th>
+                  <th className="py-3 px-3">Invoice Number</th>
+                  <th className="py-3 px-3">Channel</th>
+                  <th className="py-3 px-3">Recipient</th>
+                  <th className="py-3 px-3 text-center">Status</th>
+                  <th className="py-3 px-3">Delivery Notes / Details</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {deliveries.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-10 text-center text-slate-400">
+                      No digital delivery logs recorded yet. Create an invoice to initiate dispatches.
+                    </td>
+                  </tr>
+                ) : (
+                  deliveries.map((d) => (
+                    <tr key={d.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="py-3 px-3 text-slate-600 whitespace-nowrap">
+                        {d.created_at ? new Date(d.created_at).toLocaleString("en-IN") : "-"}
+                      </td>
+                      <td className="py-3 px-3 font-mono font-bold text-paddy-900">{d.invoice_number}</td>
+                      <td className="py-3 px-3 capitalize font-semibold text-slate-700">
+                        {d.channel?.replace("_", " ")}
+                      </td>
+                      <td className="py-3 px-3 text-slate-600 font-mono">{d.recipient}</td>
+                      <td className="py-3 px-3 text-center">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            d.status === "DELIVERED"
+                              ? "bg-emerald-100 text-emerald-800"
+                              : d.status === "SIMULATED_SENT"
+                              ? "bg-sky-100 text-sky-800"
+                              : d.status === "FAILED"
+                              ? "bg-red-100 text-red-800"
+                              : "bg-slate-100 text-slate-700"
+                          }`}
+                        >
+                          {d.status}
+                        </span>
+                      </td>
+                      <td className="py-3 px-3 text-slate-500 max-w-xs truncate">
+                        {d.details || d.error_message || d.message_id || "Dispatched"}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW / PRINT INVOICE MODAL */}
+      {viewingInvoice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-200">
+              <h3 className="font-bold text-lg text-slate-800">
+                GST Invoice Receipt – {viewingInvoice.invoice_number}
+              </h3>
+              <button onClick={() => setViewingInvoice(null)} className="icon-btn">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="my-5 p-5 border border-slate-200 rounded-xl bg-slate-50/50 space-y-4">
+              <div className="text-center">
+                <h4 className="font-black text-lg text-paddy-900">SRI ANJANEYA AGRO AGENCIES</h4>
+                <p className="text-xs text-slate-600">Main Road, Davangere, Karnataka - 577002</p>
+                <p className="text-xs text-slate-600">GSTIN: 29ANHPM1365Q1ZA | Phone: 9900389992</p>
+                <span className="inline-block mt-1 text-[11px] font-bold bg-paddy-100 text-paddy-800 px-2 py-0.5 rounded">
+                  TAX INVOICE (ORIGINAL FOR RECIPIENT)
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 text-xs border-y border-slate-200 py-3 gap-2">
+                <div>
+                  <p><span className="text-slate-500">Invoice:</span> <strong>{viewingInvoice.invoice_number}</strong></p>
+                  <p><span className="text-slate-500">Date:</span> {viewingInvoice.date}</p>
+                  <p><span className="text-slate-500">Payment:</span> {(viewingInvoice.payment_method || "Cash").toUpperCase()}</p>
+                </div>
+                <div>
+                  <p><span className="text-slate-500">Customer:</span> <strong>{viewingInvoice.customer_name || "Walk-in"}</strong></p>
+                  <p><span className="text-slate-500">Mobile:</span> {viewingInvoice.mobile || "-"}</p>
+                  <p><span className="text-slate-500">Place of Supply:</span> {viewingInvoice.is_interstate ? "Inter-State" : "Karnataka (29)"}</p>
+                </div>
+              </div>
+
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-300 text-left">
+                    <th className="py-1">Item</th>
+                    <th className="py-1 text-right">Qty</th>
+                    <th className="py-1 text-right">Rate</th>
+                    <th className="py-1 text-center">Tax %</th>
+                    <th className="py-1 text-right">Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(viewingInvoice.items || []).map((it, i) => (
+                    <tr key={i}>
+                      <td className="py-1.5 font-medium">{it.product_name || it.name}</td>
+                      <td className="py-1.5 text-right">{it.qty} {it.unit || "Bag"}</td>
+                      <td className="py-1.5 text-right">{currency.format(it.rate)}</td>
+                      <td className="py-1.5 text-center">{it.gst_percent || 0}%</td>
+                      <td className="py-1.5 text-right font-bold">{currency.format(it.total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <div className="border-t border-slate-200 pt-3 flex justify-between items-center text-sm">
+                <div>
+                  <p className="text-xs text-slate-500">Paid: {currency.format(viewingInvoice.amount_paid || 0)}</p>
+                  {Number(viewingInvoice.balance_due || 0) > 0 && (
+                    <p className="text-xs text-red-600 font-bold">Balance Due: {currency.format(viewingInvoice.balance_due)}</p>
+                  )}
+                </div>
+                <div className="text-right">
+                  <span className="text-xs text-slate-500 block">Grand Total</span>
+                  <span className="text-lg font-black text-paddy-900">{currency.format(viewingInvoice.grand_total || 0)}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-2">
+              <button onClick={() => handleDownloadPdf(viewingInvoice)} className="btn bg-paddy-700 hover:bg-paddy-800 text-white flex items-center gap-1.5 text-xs py-2">
+                <Download className="h-4 w-4" /> Download Official A4 PDF
+              </button>
+              <button onClick={() => window.print()} className="btn-secondary flex items-center gap-1.5 text-xs py-2">
+                <Printer className="h-4 w-4" /> Print Thermal
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CANCEL INVOICE MODAL */}
+      {cancellingInvoice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl">
+            <div className="flex items-center gap-3 text-red-600 pb-3 border-b border-slate-200">
+              <AlertTriangle className="h-6 w-6 shrink-0" />
+              <h3 className="font-bold text-lg text-slate-900">Cancel GST Invoice</h3>
+            </div>
+            <div className="my-4 space-y-3 text-xs text-slate-600">
+              <p>
+                You are about to cancel Invoice <strong>{cancellingInvoice.invoice_number}</strong> issued to <strong>{cancellingInvoice.customer_name || "Customer"}</strong>.
+              </p>
+              <div className="bg-red-50 p-3 rounded-lg border border-red-200 text-red-900 space-y-1">
+                <p className="font-bold">Audit Impact:</p>
+                <p>• Inventory stock quantities will be restored automatically.</p>
+                <p>• Customer pending credit will be reversed.</p>
+                <p>• Per CBIC rules, this invoice number will be marked as CANCELLED and will never be reused.</p>
+              </div>
+              <Input
+                label="Cancellation Reason (Mandatory)"
+                placeholder="e.g. Defective batch returned, Customer billing error"
+                value={cancelReason}
+                onChange={setCancelReason}
+                required
+              />
+            </div>
+            <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+              <button
+                onClick={() => setCancellingInvoice(null)}
+                className="btn-secondary text-xs py-2"
+                disabled={loading}
+              >
+                Go Back
+              </button>
+              <button
+                onClick={handleConfirmCancel}
+                disabled={loading || !cancelReason.trim()}
+                className="btn bg-red-600 hover:bg-red-700 text-white text-xs py-2 font-bold shadow-sm"
+              >
+                {loading ? "Cancelling..." : "Confirm Invoice Cancellation"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* EMAIL DISPATCH MODAL */}
+      {emailModalInvoice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+              <h3 className="font-bold text-slate-900 flex items-center gap-2">
+                <Mail className="h-5 w-5 text-sky-600" /> Email PDF Invoice
+              </h3>
+              <button onClick={() => setEmailModalInvoice(null)} className="icon-btn">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="my-4 space-y-3 text-xs">
+              <p className="text-slate-600">
+                Send official GST Tax Invoice <strong>{emailModalInvoice.invoice_number}</strong> with PDF attachment directly to farmer's inbox.
+              </p>
+              <Input
+                label="Recipient Email Address"
+                placeholder="farmer@example.com"
+                value={recipientEmail}
+                onChange={setRecipientEmail}
+                required
+              />
+            </div>
+            <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+              <button
+                onClick={() => setEmailModalInvoice(null)}
+                className="btn-secondary text-xs py-2"
+                disabled={loading}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSendCustomEmail}
+                disabled={loading || !recipientEmail.includes("@")}
+                className="btn bg-sky-600 hover:bg-sky-700 text-white text-xs py-2 font-bold flex items-center gap-1.5 shadow-sm"
+              >
+                <Send className="h-3.5 w-3.5" />
+                {loading ? "Sending..." : "Dispatch Email Invoice"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

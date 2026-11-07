@@ -1,12 +1,23 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import { createStore } from "./store/index.js";
 import { requireAuth, signToken } from "./middleware/auth.js";
 import { calculateInvoice, exportCsv, exportExcelBase64 } from "./utils/reports.js";
 import { predictionEngine } from "./services/predictionEngine.js";
 import { businessIntelligence } from "./services/businessIntelligence.js";
 import { systemSecurity } from "./services/systemSecurity.js";
+import { generateInvoicePdf } from "./services/pdfInvoice.js";
+import { sendWhatsAppInvoice, sendEmailInvoice, sendWhatsAppReminder } from "./services/digitalDelivery.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const invoicesStorageDir = path.resolve(__dirname, "storage/invoices");
+if (!fs.existsSync(invoicesStorageDir)) {
+  fs.mkdirSync(invoicesStorageDir, { recursive: true });
+}
 
 const app = express();
 const store = await createStore();
@@ -253,10 +264,187 @@ app.post("/api/sales", asyncRoute(async (req, res) => {
       return res.status(400).json({ message: `Quantity for '${item.product_name || item.name || "item"}' must be greater than zero.` });
     }
   }
-  const preview = await calculateInvoice(req.body.items || [], store);
+
+  // Calculate invoice with options (intra-state vs inter-state support)
+  const preview = await calculateInvoice(req.body.items || [], store, req.body);
   const sale = await store.createSale({ ...req.body, ...preview }, req.user);
+
+  // Background A4 PDF Generation & Automatic Digital Delivery Dispatch
+  const safeInvNo = (sale.invoice_number || `INV-${sale.id}`).replace(/[\/\\?%*:|"<>]/g, "-");
+  const pdfFileName = `${safeInvNo}.pdf`;
+  const pdfFilePath = path.join(invoicesStorageDir, pdfFileName);
+
+  generateInvoicePdf(sale, pdfFilePath)
+    .then(async (savedPath) => {
+      // Automatic WhatsApp dispatch
+      sendWhatsAppInvoice({ sale, pdfPath: savedPath })
+        .then((waRes) => {
+          if (typeof store.logDigitalDelivery === "function") {
+            store.logDigitalDelivery({
+              sale_id: sale.id,
+              invoice_number: sale.invoice_number,
+              channel: "whatsapp",
+              recipient: waRes.recipient,
+              status: waRes.status,
+              message_id: waRes.message_id,
+              error: waRes.error,
+              details: waRes.details
+            }).catch(console.error);
+          }
+        })
+        .catch((err) => console.error("[WhatsApp Delivery Error]", err));
+
+      // Automatic Email dispatch
+      const targetEmail = req.body.customer_email || req.body.email || sale.customer_email;
+      sendEmailInvoice({ sale, pdfPath: savedPath, recipientEmail: targetEmail })
+        .then((emRes) => {
+          if (typeof store.logDigitalDelivery === "function") {
+            store.logDigitalDelivery({
+              sale_id: sale.id,
+              invoice_number: sale.invoice_number,
+              channel: "email",
+              recipient: emRes.recipient,
+              status: emRes.status,
+              message_id: emRes.message_id,
+              error: emRes.error,
+              details: emRes.details
+            }).catch(console.error);
+          }
+        })
+        .catch((err) => console.error("[Email Delivery Error]", err));
+    })
+    .catch((err) => console.error("[PDF Invoice Generation Error]", err));
+
   predictionEngine.checkAndTriggerRetrain(store).catch(console.error);
   res.status(201).json(sale);
+}));
+
+// PDF Invoice View / Download
+app.get("/api/invoices/:id/pdf", asyncRoute(async (req, res) => {
+  const sale = await store.getSale(req.params.id);
+  if (!sale) return res.status(404).json({ message: "Invoice not found" });
+
+  const safeInvNo = (sale.invoice_number || `INV-${sale.id}`).replace(/[\/\\?%*:|"<>]/g, "-");
+  const pdfFileName = `${safeInvNo}.pdf`;
+  const pdfFilePath = path.join(invoicesStorageDir, pdfFileName);
+
+  if (!fs.existsSync(pdfFilePath)) {
+    await generateInvoicePdf(sale, pdfFilePath);
+  }
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `inline; filename="${pdfFileName}"`);
+  const stream = fs.createReadStream(pdfFilePath);
+  stream.pipe(res);
+}));
+
+// Cancel Invoice with audit trail
+app.post("/api/invoices/:id/cancel", asyncRoute(async (req, res) => {
+  const reason = req.body.reason || "Invoice cancelled by shop administrator";
+  if (typeof store.cancelSale !== "function") {
+    return res.status(501).json({ message: "Invoice cancellation not supported by active store" });
+  }
+  const cancelledSale = await store.cancelSale(req.params.id, reason, req.user);
+  res.json({ message: "Invoice cancelled and inventory stock restored", sale: cancelledSale });
+}));
+
+// Manual Retry / Resend Digital Delivery
+app.post("/api/invoices/:id/retry-delivery", asyncRoute(async (req, res) => {
+  const sale = await store.getSale(req.params.id);
+  if (!sale) return res.status(404).json({ message: "Invoice not found" });
+
+  const channel = req.body.channel || "all";
+  const safeInvNo = (sale.invoice_number || `INV-${sale.id}`).replace(/[\/\\?%*:|"<>]/g, "-");
+  const pdfFileName = `${safeInvNo}.pdf`;
+  const pdfFilePath = path.join(invoicesStorageDir, pdfFileName);
+
+  if (!fs.existsSync(pdfFilePath)) {
+    await generateInvoicePdf(sale, pdfFilePath);
+  }
+
+  const results = {};
+  if (channel === "whatsapp" || channel === "all") {
+    const waRes = await sendWhatsAppInvoice({ sale, pdfPath: pdfFilePath });
+    if (typeof store.logDigitalDelivery === "function") {
+      await store.logDigitalDelivery({
+        sale_id: sale.id,
+        invoice_number: sale.invoice_number,
+        channel: "whatsapp",
+        recipient: waRes.recipient,
+        status: waRes.status,
+        message_id: waRes.message_id,
+        error: waRes.error,
+        details: waRes.details
+      });
+    }
+    results.whatsapp = waRes;
+  }
+
+  if (channel === "email" || channel === "all") {
+    const targetEmail = req.body.email || sale.customer_email || sale.email;
+    const emRes = await sendEmailInvoice({ sale, pdfPath: pdfFilePath, recipientEmail: targetEmail });
+    if (typeof store.logDigitalDelivery === "function") {
+      await store.logDigitalDelivery({
+        sale_id: sale.id,
+        invoice_number: sale.invoice_number,
+        channel: "email",
+        recipient: emRes.recipient,
+        status: emRes.status,
+        message_id: emRes.message_id,
+        error: emRes.error,
+        details: emRes.details
+      });
+    }
+    results.email = emRes;
+  }
+
+  res.json({ message: "Digital delivery dispatched successfully", results });
+}));
+
+// Global Digital Deliveries History
+app.get("/api/invoices/deliveries", asyncRoute(async (req, res) => {
+  if (typeof store.listDigitalDeliveries === "function") {
+    return res.json(await store.listDigitalDeliveries(req.query));
+  }
+  res.json([]);
+}));
+
+// Invoice Audit Logs
+app.get("/api/invoices/audit-logs", asyncRoute(async (req, res) => {
+  if (typeof store.listAuditLogs === "function") {
+    return res.json(await store.listAuditLogs(req.query.invoice_number));
+  }
+  res.json([]);
+}));
+
+// Payment Reminders Dispatch
+app.post("/api/invoices/send-reminder", asyncRoute(async (req, res) => {
+  const { customer, overdueDays, principalAmount, accruedInterest, totalDue, invoiceNo } = req.body;
+  if (!customer) return res.status(400).json({ message: "Customer data required" });
+
+  const result = await sendWhatsAppReminder({
+    customer,
+    overdueDays: Number(overdueDays || 0),
+    principalAmount: Number(principalAmount || 0),
+    accruedInterest: Number(accruedInterest || 0),
+    totalDue: Number(totalDue || 0),
+    invoiceNo: invoiceNo || "Credit Outstanding"
+  });
+
+  if (typeof store.logDigitalDelivery === "function") {
+    await store.logDigitalDelivery({
+      sale_id: "",
+      invoice_number: invoiceNo || "REMINDER",
+      channel: "whatsapp_reminder",
+      recipient: result.recipient,
+      status: result.status,
+      message_id: result.message_id,
+      error: result.error,
+      details: "Credit payment reminder dispatched"
+    });
+  }
+
+  res.json({ message: "Payment reminder dispatched successfully", result });
 }));
 
 app.get("/api/purchases", asyncRoute(async (req, res) => {
